@@ -1,0 +1,46 @@
+spring:
+  application:
+    name: mac-studio-backend
+  profiles:
+    default: local
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+  servlet:
+    multipart:
+      max-file-size: 15MB
+      max-request-size: 20MB
+server:
+  port: ${SERVER_PORT:8080}
+  error:
+    include-message: never
+    include-stacktrace: never
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: never
+springdoc:
+  api-docs:
+    enabled: false
+  swagger-ui:
+    enabled: false
+app:
+  cors:
+    allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:3000}
+  jwt:
+    issuer: ${JWT_ISSUER:mac-studio}
+    audience: ${JWT_AUDIENCE:mac-studio-api}
+    secret-base64: ${JWT_SECRET_BASE64:}
+  storage:
+    enabled: ${S3_ENABLED:false}
+    bucket: ${S3_BUCKET:}
+    region: ${AWS_REGION:ap-northeast-2}
+  limits:
+    guest-upload-bytes: 5242880
+    member-upload-bytes: 10485760
+    member-storage-bytes: 31457280

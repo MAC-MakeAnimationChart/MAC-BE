@@ -1,0 +1,13 @@
+# Local-only credentials. Excluded from Git.
+spring:
+  datasource:
+    url: "jdbc:mysql://localhost:3306/mac?connectionTimeZone=UTC"
+    username: root
+    password: ""
+  flyway:
+    enabled: false
+springdoc:
+  api-docs:
+    enabled: true
+  swagger-ui:
+    enabled: true
