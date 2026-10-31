@@ -7,6 +7,8 @@ Java 17 / Spring Boot 4.1.1 / Gradle 기반 백엔드 초기 구조.
 
 ## 프론트엔드·백엔드 협업 문서
 
+- [AUTH API 명세](docs/AUTH_API.md): 확정된 가입·로그인·재발급·로그아웃 계약과 FE/BE 책임. 미구현 API이며 후속 AUTH 범위를 구분한다.
+- [회원·인증 ERD](docs/AUTH_ERD_REVIEW.md): 약관 동의 후 회원 생성 정책 및 8테이블 설계.
 - [MVP 설계 및 연동 기준](docs/MVP_DESIGN.md): 확정된 ERD, 인증·저장 흐름, 화면별 책임, 구현 상태와 미확정 사항.
 - 구현된 API의 요청·응답은 로컬 Swagger/OpenAPI에서 확인한다. 설계 문서의 예정 기능은 아직 호출할 수 없다.
 - README와 `docs/`는 Git 공유 대상이다. 개인 AI 문서 없이도 협업에 필요한 설계를 확인할 수 있다.
