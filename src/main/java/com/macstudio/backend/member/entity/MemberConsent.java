@@ -85,6 +85,7 @@ public class MemberConsent {
     )
     private LocalDateTime agreedAt;
 
+    /** 동의 대상 회원·문서 종류·버전의 필수값과 길이를 검증한다. */
     private MemberConsent(
             Member member,
             ConsentDocumentType documentType,
@@ -103,6 +104,7 @@ public class MemberConsent {
         }
     }
 
+    /** 서비스가 확인한 약관 동의를 신규 이력으로 생성한다. */
     public static MemberConsent agree(
             Member member,
             ConsentDocumentType documentType,
@@ -111,6 +113,7 @@ public class MemberConsent {
         return new MemberConsent(member, documentType, documentVersion);
     }
 
+    /** 최초 저장 시 동의 시각을 UTC 밀리초로 기록한다. */
     @PrePersist
     private void prePersist() {
         this.agreedAt = LocalDateTime.now(ZoneOffset.UTC)

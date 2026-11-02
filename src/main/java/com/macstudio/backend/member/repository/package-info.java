@@ -1,2 +1,2 @@
-/** member repository layer. Business implementation is pending; see .ai/STATE.md. */
+/** Persistence access for members, consent history, and social identities. */
 package com.macstudio.backend.member.repository;

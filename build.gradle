@@ -47,21 +47,28 @@ dependencies {
 	testImplementation 'org.springframework.boot:spring-boot-starter-security-test'
 	testImplementation 'org.springframework.boot:spring-boot-starter-validation-test'
 	testImplementation 'org.springframework.boot:spring-boot-starter-webmvc-test'
-	testImplementation 'org.springframework.boot:spring-boot-testcontainers'
-	testImplementation 'org.testcontainers:testcontainers-junit-jupiter'
-	testImplementation 'org.testcontainers:testcontainers-mysql'
 	testCompileOnly 'org.projectlombok:lombok'
 	testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 	testAnnotationProcessor 'org.projectlombok:lombok'
 }
 
 tasks.named('test') {
-	useJUnitPlatform { excludeTags 'mysql' }
+	useJUnitPlatform { excludeTags 'mysql', 'mysql-integration' }
 }
 
-// Explicit opt-in: creates only the mac database, then checks Spring's DataSource.
+// 사용자 승인에 따라 로컬 mac에서 테스트 소유 데이터만 생성·정리한다. 자동 DDL 없음.
+tasks.register('mysqlIntegrationTest', Test) {
+	description = 'Verify member and auth persistence against local MySQL mac (no Docker)'
+	group = 'verification'
+	testClassesDirs = sourceSets.test.output.classesDirs
+	classpath = sourceSets.test.runtimeClasspath
+	useJUnitPlatform { includeTags 'mysql-integration' }
+	outputs.upToDateWhen { false }
+}
+
+// 명시적 실행: 수동 생성된 mac DB에 SELECT만 수행한다.
 tasks.register('mysqlConnectionTest', Test) {
-	description = 'Create mac if absent and verify the local root MySQL connection'
+	description = 'Verify the existing local mac database connection without DDL'
 	group = 'verification'
 	testClassesDirs = sourceSets.test.output.classesDirs
 	classpath = sourceSets.test.runtimeClasspath

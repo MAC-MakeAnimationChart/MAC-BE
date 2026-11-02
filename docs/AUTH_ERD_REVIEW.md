@@ -1,13 +1,16 @@
 # 회원·인증 ERD 검토안
 
-기준일: 2026-10-31. **사용자 합의 정책 반영 / DDL 검토본 / DB 미적용.**
+설계 기준일: 2026-10-31. **사용자 합의 정책 반영 / DDL 검토본.** 로컬 mac 테이블 8개 존재는 2026-11-01 확인했으며 전체 컬럼/제약 적합성은 아직 검증하지 않았다.
 기준 SQL: 프로젝트 루트 `sql-file.sql`. 필수 인증·약관 동의 후 회원 생성 정책을 반영한다.
+구현 현황(2026-11-03): Member/MemberConsent/MemberIdentity/AuthChallenge/RefreshToken 엔티티·저장소 및 이메일 AUTH API 구현·로컬 mac 통합 검증 완료. OAuth 및 정식 migration 미구현. [구현 상태](IMPLEMENTATION_STATUS.md), [DB 환경](DATABASE.md) 참고.
 기존 MVP_DESIGN.md의 member NOT NULL 및 인증 보조 테이블 설명보다 이 문서의 최신 회원·인증 정의를 우선한다.
 
 ## SQL 선택
+- 환경 기준은 [DB 환경 문서](DATABASE.md)를 따른다. 로컬 MySQL의 mac DB는 생성되어 있으며 root로 접속한다. 아래 선택 조건은 DB 존재 여부가 아니라 **업무 테이블 상태** 기준이다. Docker는 사용하지 않고 RDS는 향후 개발·운영 DB 모두에 사용할 계획이다.
 - `../sql/03_full_schema_review.sql`: mac 스키마에 대상 테이블 8개가 없는 경우의 전체 생성본.
 - `../sql/02_auth_additions_review.sql`: 원본과 정확히 같은 member/dataset/chart가 이미 있는 경우의 변경본. member ALTER + 5개 CREATE.
 - `../sql/04_signup_after_consent_alter_review.sql`: 이전 8테이블 검토안을 이미 적용한 DB용 ALTER. member 상태 변경, OAuth 가입 대기 정보 추가 및 callback 소비 시각 이름 변경.
+- 2026-11-03 소셜 역할 변경으로 기존 02/03/04의 oauth_transaction state/callback/PKCE 컬럼은 목표 구조와 불일치한다. 기존 SQL 파일은 수정하지 않으며 구현 전에 별도 수동 ALTER 컨텍스트를 검토한다.
 - 현재 DB에 맞는 파일 하나만 선택한다. 최신 02/03에는 04의 변경이 이미 포함되어 있으므로 이어서 실행하지 않는다. 현재 DB 스키마·데이터는 조사하거나 변경하지 않았다.
 - 04 실행 전 PENDING_TERMS 행이 없어야 한다. 남아 있다면 동의 증거와 데이터를 확인하여 별도 전환 계획을 세워야 한다. 자동 활성화·삭제하지 않으며 새 CHECK가 해당 행이 있으면 member ALTER를 거절한다. 02로 기존 회원에 ACTIVE를 추가하는 경우에도 실제 약관 동의 이력 점검이 선행되어야 한다.
 - CREATE DATABASE, DROP, 데이터 삭제, 자동 Flyway 실행은 포함하지 않는다. DDL은 트랜잭션 ROLLBACK을 전제로 실행할 수 없다.
@@ -113,16 +116,10 @@ erDiagram
         varchar intent
         bigint member_id FK "nullable"
         bigint challenge_id FK,UK "nullable"
-        binary state_hash UK
-        binary browser_binding_hash
-        varbinary pkce_verifier_encrypted "nullable"
-        binary nonce_hash "nullable"
-        varchar next_path
-        datetime expires_at
-        datetime callback_consumed_at "nullable"
         binary signup_token_hash UK "nullable"
         datetime signup_expires_at "nullable"
         datetime signup_consumed_at "nullable"
+        datetime exchange_completed_at
         datetime created_at
     }
     MEMBER_CONSENT {
@@ -138,9 +135,9 @@ erDiagram
 
 ### member
 - 기존 email/password_hash만 NULL 허용으로 바꾸고 status/auth_version을 추가한다.
-- email: 검증된 서비스 이메일만 저장. 공백 제거·소문자화 정책을 서버에서 일관되게 적용. 기존 대소문자 비구분 collation과 UNIQUE 유지. 소셜 이메일이 없거나 신뢰 불가하면 NULL. 신뢰 가능한 이메일이 기존 회원과 중복되면 신규 가입 거절(충돌 회피를 위해 NULL로 바꾸지 않음).
+- email: 검증된 서비스 이메일만 저장. 공백 제거·소문자화 정책을 서버에서 일관되게 적용. 기존 대소문자 비구분 collation과 UNIQUE 유지. 소셜 이메일이 없거나 신뢰 불가하면 NULL. 신뢰 가능한 이메일이 기존 회원과 중복되면 신규 가입 거절(충돌 회피를 위해 NULL로 바꾸지 않음). 탈퇴 회원도 이메일을 유지하므로 동일 이메일 재가입은 영구 차단한다.
 - password_hash: BCrypt. 비밀번호가 있으면 email도 있어야 한다는 CHECK 적용. 이메일만 있고 비밀번호가 없는 소셜 회원은 허용.
-- status: ACTIVE / DELETING. 기본값은 ACTIVE. 최초 가입용 PENDING_TERMS는 제거한다. 이메일·소셜 모두 필수 인증과 약관 동의 완료 후에만 회원을 생성한다. 기존 회원에게 동의 이력을 만들어내지 않는다.
+- status: 코드 기준 ACTIVE / DELETING / WITHDRAWN이며 기본값은 ACTIVE다. `withdrawn_at DATETIME(3) NULL`은 WITHDRAWN일 때만 값이 존재한다. 로컬 DB DDL은 아직 수동 적용 전이다. 최초 가입용 PENDING_TERMS는 제거한다. 이메일·소셜 모두 필수 인증과 약관 동의 완료 후에만 회원을 생성한다.
 - auth_version: 비밀번호 재설정·이메일 변경 등 보안 변경 시 증가. JWT/인증 증명 발급 당시 값과 현재 값을 비교해야 실제 무효화가 된다. 현재 JWT 설정에 이미 구현되어 있다는 뜻이 아니다.
 - 이메일 검증 시각, 이름, 프로필, 전화번호, last_login_at은 제외.
 
@@ -174,19 +171,16 @@ erDiagram
 - 로그아웃은 현재 refresh family만 폐기하고 다른 기기는 유지한다. FE는 메모리 Access와 회원 정보를 제거한다. 기존 Access JWT는 최대 10분의 잔여 유효시간을 허용한다.
 
 ### oauth_transaction
-- LOGIN: member_id/challenge_id NULL. LINK/REAUTH: 둘 다 필수, challenge.member_id와 동일해야 한다.
-- challenge_id UNIQUE: challenge 하나에 OAuth 시도 하나. 재시도는 새 challenge/transaction을 만들고 이전 시도를 취소한다.
-- state_hash/browser_binding_hash: 요청과 callback 및 시작 브라우저를 연결. PK나 state의 존재만으로 인증 성공 처리하지 않는다.
-- pkce_verifier_encrypted: 원문 교환이 필요하므로 해시가 아닌 인증된 암호화 봉투(key ID/nonce/tag/ciphertext). 키는 DB 밖에 보관.
-- nonce_hash: OIDC nonce 검증용. 해당 플로우에서 PKCE/OIDC를 쓰는 경우 관련 값이 필수인지 서비스가 검사한다.
-- next_path: 서비스 내부 allowlist 경로만 저장. URL 정규화·외부 URL/우회 인코딩 검사는 서비스 책임.
-- expires_at/callback_consumed_at: OAuth 시도 만료·callback 중복 처리 방지. 기존 consumed_at을 callback_consumed_at으로 변경한다. code 교환 중 경쟁은 DB 조건부 claim 등으로 막고 실패 시 새 시도로 재시작한다.
-- provider_subject: BE가 검증한 제공사 사용자 ID. verified_email: 서비스 이메일로 신뢰 가능한 제공사 이메일만 저장하며 없거나 신뢰 불가하면 NULL. 인증 시작 시 둘 다 NULL이다.
+- FE가 팝업·provider callback·state 단일 소비·PKCE verifier를 관리한다. BE는 OAuth state, verifier, callback next 경로를 DB에 저장하지 않는다.
+- `/auth/social`은 codeVerifier를 제공사 code 교환에 한 번 사용하고 원문 code/verifier/token을 저장하지 않는다. redirectUri는 서버 allowlist와 정확히 비교한다.
+- LOGIN 신규 가입 대기자는 member_id/challenge_id가 NULL이다. REAUTH는 둘 다 필수이며 challenge.member_id와 동일해야 한다.
+- challenge_id UNIQUE: 재인증 challenge 하나에 OAuth 검증 결과 하나. 재시도는 새 challenge/transaction을 만들고 이전 시도를 취소한다.
+- provider_subject는 BE가 제공사에서 검증한 사용자 ID다. verified_email은 신뢰 가능한 제공사 이메일만 저장하며 없거나 신뢰 불가하면 NULL이다.
+- exchange_completed_at은 제공사 code 교환과 신원 검증이 성공한 시각이다. 성공 전에 OAuth 임시 가입/재인증 증명을 만들지 않는다.
 - signup_token_hash: 무작위 가입용 일회성 증명의 SHA-256 원시 32바이트, UNIQUE. signup_expires_at은 가입 기한, signup_consumed_at은 최종 가입 소비 시각이다.
-- 기존 소셜 회원은 로그인하며 가입 증명을 발급하지 않는다. 신규 회원만 callback 검증 후 가입 증명을 발급하며 member/identity/consent/refresh는 아직 생성하지 않는다.
-- 신규 가입 증명은 intent=LOGIN, 검증된 provider_subject, callback_consumed_at이 있을 때만 저장 가능하다. 증명과 만료는 동시에 존재하며 소비 시각은 callback 이후 및 가입 만료 이전이어야 한다.
-- signup proof 전달·소비는 시작 브라우저에 묶는다. 소셜 신규 가입은 member_id/challenge_id NULL인 OAuth 기록의 signup proof를 사용한다. 기존 회원의 LINK/REAUTH는 회원 및 auth_challenge의 proof와 연결한다.
-- /auth/signup에서 필수 약관·미소비 가입 증명·브라우저·만료를 확인하고 이메일/소셜 ID 중복을 다시 검사한다. member+member_identity+member_consent+refresh_token 생성과 signup_consumed_at 갱신은 같은 DB 트랜잭션에서 수행한다. 중복 가입 경쟁은 행 잠금/조건부 소비와 UNIQUE로 차단한다.
+- 기존 소셜 회원은 즉시 JWT 로그인하며 가입 증명을 발급하지 않는다. 신규 회원만 code 교환 검증 후 가입 증명을 발급하며 member/identity/consent/refresh는 아직 생성하지 않는다.
+- 가입 증명 원문은 `mac_social_signup` HttpOnly 쿠키로만 전달한다. DB에는 signup_token_hash만 저장하고 만료·단일 소비를 검사한다.
+- `/auth/signup`에서 필수 약관·미소비 가입 쿠키·만료를 확인하고 이메일/소셜 ID 중복을 다시 검사한다. member+member_identity+member_consent+refresh_token 생성과 signup_consumed_at 갱신은 같은 DB 트랜잭션에서 수행한다. 중복 가입 경쟁은 행 잠금/조건부 소비와 UNIQUE로 차단한다.
 - 가입 도중 이탈하면 회원을 만들지 않고 임시 정보를 만료·정리한다. expires_at만으로 정리하지 않는다. 정리 조건은 expires_at <= 현재 UTC AND (signup_expires_at IS NULL OR signup_expires_at <= 현재 UTC)로 잡아 유효한 가입 증명을 보존한다. 만료된 개인정보도 정기 정리한다.
 
 ### member_consent
@@ -201,11 +195,11 @@ erDiagram
 |---|---|---|
 | member → dataset | RESTRICT, 기존 유지 | S3 정리 전에 회원만 지우는 실수 방지 |
 | dataset → chart | CASCADE, 기존 유지 | 데이터셋의 하위 차트 동시 제거 |
-| member → 인증용 5개 테이블 | CASCADE | 회원 최종 삭제 시 연결·인증·동의 기록 제거 |
+| member → 인증용 5개 테이블 | CASCADE 제약은 관리 목적의 예외적 물리 삭제에만 적용 | 일반 회원 탈퇴는 member를 삭제하지 않는 soft delete이므로 CASCADE가 실행되지 않음 |
 | auth_challenge → oauth_transaction | CASCADE | 만료 인증 정리 시 관련 임시 OAuth 상태도 제거 |
 
-동의 이력은 회원 존속 중 조회하는 범위다. 탈퇴 후 보존이 필요한 별도 정책은 아직 없다.
-탈퇴는 재인증 → DELETING/토큰 폐기 → S3 정리 → dataset 삭제 → member 최종 삭제 순서가 가능하다.
+일반 회원 탈퇴에서는 member 행과 정규화 이메일을 보존한다. 탈퇴 상태와 탈퇴 시각을 기록하고 동일 이메일 재가입을 차단한다. 동의 이력 등 나머지 개인정보의 보존·파기 범위와 보존 기간은 구현 전 별도로 확정해야 한다.
+탈퇴 흐름은 재인증 → DELETING/모든 토큰 폐기 → S3 정리 → dataset 삭제 → member soft delete 완료 상태 기록 순서다. member 최종 물리 삭제는 일반 탈퇴 절차에 포함하지 않는다.
 **8개 테이블만으로 S3 삭제 재시도까지 구현되는 것은 아니다.** 이번 ERD에서 기존 저장 구조는 유지했다. 저장 객체/삭제 작업 테이블은 기존 STORAGE 설계의 후속 범위이며, 이를 구현하기 전에는 dataset/chart 참조를 남긴 채 DELETING 상태에서 S3 정리를 완료해야 한다. 실패 시 참조를 지우지 않고 재시도한다.
 
 ## DB 제약과 서비스 책임의 경계

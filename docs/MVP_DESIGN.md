@@ -3,7 +3,7 @@
 기준일: 2026-10-27 (Asia/Seoul)
 
 > 2026-10-31 회원·인증 확장안은 [ERD 검토 문서](AUTH_ERD_REVIEW.md)를 참고한다.
-> 아래 member/인증 스키마는 종전 기준이다. 최신 ERD와 [가입·로그인 AUTH 명세](AUTH_API.md)를 우선하며 모두 DB/API 미구현이다.
+> 아래 member/인증 스키마는 종전 기준이다. 최신 ERD와 [가입·로그인 AUTH 명세](AUTH_API.md)를 우선한다. 2026-11-03 현재 이메일 AUTH API 코드는 작성되었으나 로컬 mac 통합 검증 완료이며 [구현 상태 점검](IMPLEMENTATION_STATUS.md)을 따른다.
 
 이 문서는 프론트엔드·백엔드 개발자가 공유하는 설계 기준이다. **설계 확정은 구현 완료를 의미하지 않는다.** 실제 제공 중인 API와 구현 예정 사항을 구분한다. 실행 방법과 환경 설정은 [README](../README.md)를 참고한다.
 
@@ -13,8 +13,9 @@
 |---|---|
 | Spring Boot 프로젝트, 도메인별 패키지 | 준비 완료. health 외 업무 도메인은 대부분 패키지만 존재 |
 | JWT 검증 기반 | HS256, issuer, audience, exp, sub 검증 및 BCrypt 구성 완료 |
-| 로컬 MySQL | mac DB 연결 확인 완료. 업무 테이블 migration·entity는 미구현 |
-| 회원가입·이메일 인증·로그인·재발급·로그아웃 | 미구현 |
+| 로컬 MySQL | root로 접속하는 mac에 8테이블 존재 확인. Member/MemberConsent/MemberIdentity/AuthChallenge 엔티티·저장소 구현. mac에서 데이터 계층 검증, 정식 migration 미구현 |
+| 운영 DB | AWS RDS for MySQL 사용 예정. 아직 구축·연결하지 않음. [DB 환경 기준](DATABASE.md) 참고 |
+| 회원가입·이메일/소셜 인증·로그인·재발급·로그아웃 | EMAIL 흐름 로컬 mac 통합 검증 완료. SOCIAL code 교환/가입/재인증 코드 구현 완료, 수동 DB ALTER·실제 제공사 검증 대기 |
 | 데이터셋·차트 CRUD, revision 충돌 처리 | 미구현 |
 | S3 데이터·썸네일 저장 및 삭제 재시도 | 설계 단계. 실제 AWS 연결 미검증 |
 | Swagger / 기본 HTTP·Security 테스트 | 제공 중. 업무 API 연동 완료를 의미하지 않음 |
@@ -87,7 +88,7 @@ erDiagram
 - 이메일은 정규화한다. 구체적인 정규화·collation 정책은 DDL/API 구현 전에 확정한다.
 - 차트 소유자는 `chart → dataset.member_id`로 확인한다. chart에 member_id를 중복 저장하지 않는다.
 - dataset 삭제 시 하위 chart도 삭제하며, S3 삭제 작업을 같은 DB 트랜잭션에 기록한다. chart만 삭제하면 dataset은 유지한다.
-- soft delete 컬럼은 두지 않는다. 실제 FK 삭제 옵션은 S3 정리 기록 보존을 고려해 migration에서 확정한다.
+- dataset/chart에는 soft delete 컬럼을 두지 않는다. 회원 탈퇴만 member soft delete로 처리하며 탈퇴 상태·시각과 이메일을 보존한다. 실제 FK 삭제 옵션은 S3 정리 기록 보존을 고려해 migration에서 확정한다.
 
 ### 차트 설정 JSON
 
@@ -120,13 +121,15 @@ erDiagram
 최신 확정 계약은 [AUTH API 명세](AUTH_API.md), 스키마는 [회원·인증 ERD](AUTH_ERD_REVIEW.md)를 따른다.
 
 - 이메일·소셜 모두 필수 인증과 약관 동의 완료 후 공통 /auth/signup에서 회원 생성·자동 로그인한다.
-- 소셜 신규 인증 결과는 OAuth 임시 기록에만 보관하며 가입 전 회원/로그인 토큰을 만들지 않는다.
+- FE가 팝업·provider callback·state·PKCE를 담당하고 BE가 `/auth/social`에서 code 교환·제공사 신원을 검증한다. 소셜 신규 인증 결과는 OAuth 임시 기록과 HttpOnly 가입 쿠키로만 보관하며 가입 전 회원/로그인 토큰을 만들지 않는다.
+- 소셜 계정은 제공사 인증만 사용하는 간편 로그인 계정이며 서비스 비밀번호 관리나 이메일·비밀번호 로그인을 제공하지 않는다.
 - 약관 원문/화면은 FE, 필수 버전 검증/동의 이력은 BE. 최초 가입용 PENDING_TERMS 또는 /me/terms를 사용하지 않는다.
 - Access JWT는 FE 메모리에 보관하여 Bearer로 전달한다. 회원 식별·소유권은 JWT sub와 DB 관계로 확인한다.
 - Refresh는 HttpOnly 쿠키·DB 해시 저장·회전/재사용 탐지. 로그아웃은 현재 family 폐기, 다른 기기는 유지하며 Access 잔여 최대 10분을 허용한다.
 - 로그인 실패는 INVALID_CREDENTIALS로 통일한다. 같은 이메일이라는 이유로 소셜 계정을 자동 병합하지 않는다.
-- 쿠키/Origin/CSRF/CORS를 함께 구현한다. 소셜 신규 가입 증명 전달 세부 계약 및 운영 제한값은 공유 명세에서 미확정으로 구분했다.
-- 위 AUTH API는 아직 호출할 수 없다. 비밀번호 복구·계정 관리·재인증·탈퇴는 후속 명세 범위다.
+- 쿠키/Origin/CSRF/CORS를 함께 구현한다. 소셜 신규 가입 증명은 짧은 HttpOnly 쿠키로 전달하고 운영 TTL·SameSite·redirectUri allowlist는 구현 설정으로 확정한다.
+- 이메일 AUTH와 /me는 로컬 통합 검증을 완료했다. 소셜 가입·로그인 및 이메일/소셜 soft delete 탈퇴 코드는 구현됐고 수동 DB ALTER·실제 제공사 통합 검증이 남아 있다. 이메일 비밀번호 복구·재설정·변경은 MVP에서 제외한다.
+- 회원 탈퇴 후 member 행과 정규화 이메일을 보존하여 동일 이메일 재가입을 차단한다. FE 탈퇴 모달은 `탈퇴 후 동일한 이메일로 다시 가입할 수 없습니다.` 경고를 최종 제출 전에 표시해야 한다.
 
 ## 6. 데이터·썸네일 저장 흐름
 
@@ -192,14 +195,14 @@ MySQL에는 소유권·메타데이터·차트 설정 JSON·저장 객체 상태
 [MAC-MakeAnimationChart/BE](https://github.com/MAC-MakeAnimationChart/BE)의 develop `a60ff4a8a034d283072e8a17a74d99022f46e52e`를 설계 참고 자료로 검토했다. 외부 레포가 우리 API 계약의 기준은 아니다.
 
 - 우리 핵심 member → dataset → chart 모델을 유지한다. 참고 레포의 folder/project/data_sources 모델을 이식하지 않는다.
-- 소셜 로그인은 사용자 요구에 따라 AUTH 명세에 포함한다. 관리자 역할·휴면 상태·soft delete는 별도 확정하지 않았다.
+- 소셜 로그인은 사용자 요구에 따라 AUTH 명세에 포함한다. 관리자 역할·휴면 상태는 별도 확정하지 않았다. 회원 탈퇴는 soft delete로 확정했으며 dataset/chart 삭제 정책과 구분한다.
 - 공통 예외 처리, 요청/응답 DTO 분리, 검증, CI, 요청 ID 로깅은 재사용 검토 대상이다. 도입 완료 또는 추가 요구 확정을 의미하지 않는다.
 - 참고 레포의 Refresh 원문 저장 방식 대신 해시 저장 원칙을 유지한다.
 - 운영 로그·느린 쿼리·알림 설정 테이블과 Redis는 현재 필수 도입 사항으로 확정하지 않았다.
 
 ## 10. 다음 계약 확정 항목
 
-1. 확정 AUTH 계약을 기준으로 소셜 가입 증명 전달·운영 제한값·쿠키/CSRF 설정 구체화 및 후속 계정 관리 명세.
+1. FE 주도 팝업/state/PKCE 계약을 기준으로 `/auth/social`, SOCIAL `/auth/signup`, `/auth/social/reauth` 및 provider별 검증·쿠키 운영값 구현.
 2. 보조 테이블 상세 DDL, FK 삭제 규칙, S3 정리 작업의 동시성 처리.
 3. 업무 API URL/DTO, 오류 코드, 페이지네이션, 멱등성 키 형식.
 4. 서버 데이터·이미지 크기 제한, 저장량 계산·동시 갱신 방식.

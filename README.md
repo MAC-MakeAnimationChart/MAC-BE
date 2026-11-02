@@ -3,11 +3,14 @@
 Java 17 / Spring Boot 4.1.1 / Gradle 기반 백엔드 초기 구조.
 도메인별 controller → service → repository 및 dto/entity를 사용한다.
 
-**현재는 구조·보안 기반·health만 구현했다. 회원/차트 CRUD, 정식 MySQL migration, S3 저장·정리 작업은 다음 개발 범위다.**
+**2026-11-03 이메일 인증·가입·로그인·Refresh·로그아웃 및 /me는 로컬 mac 통합 검증 완료. 이메일/소셜 soft delete 탈퇴와 소셜 가입·로그인·재인증 코드는 구현됐으며 수동 스키마 적용·MySQL/실제 제공사 통합 검증은 남아 있다. [구현 상태](docs/IMPLEMENTATION_STATUS.md) 참고. 실제 SMTP·브라우저 검증 및 데이터셋/차트/S3 API는 후속 범위다.**
+
+전체 패키지·클래스·메서드 역할과 DTO/엔티티 경계는 [백엔드 구조 문서](docs/BACKEND_STRUCTURE.md)를 참고한다.
 
 ## 프론트엔드·백엔드 협업 문서
 
-- [AUTH API 명세](docs/AUTH_API.md): 확정된 가입·로그인·재발급·로그아웃 계약과 FE/BE 책임. 미구현 API이며 후속 AUTH 범위를 구분한다.
+- [AUTH API 명세](docs/AUTH_API.md): 이메일 API 통합 검증 완료. 소셜은 FE 팝업/state/PKCE, BE code 교환/JWT 방식으로 코드 구현 완료 후 실제 제공사 검증 대기.
+- [PowerShell 통합 시나리오](scripts/README.md): 실제 이메일 코드 또는 provider code를 입력해 가입·로그인·`/me` 흐름을 순차 검증.
 - [회원·인증 ERD](docs/AUTH_ERD_REVIEW.md): 약관 동의 후 회원 생성 정책 및 8테이블 설계.
 - [MVP 설계 및 연동 기준](docs/MVP_DESIGN.md): 확정된 ERD, 인증·저장 흐름, 화면별 책임, 구현 상태와 미확정 사항.
 - 구현된 API의 요청·응답은 로컬 Swagger/OpenAPI에서 확인한다. 설계 문서의 예정 기능은 아직 호출할 수 없다.
@@ -32,13 +35,15 @@ Java 17 / Spring Boot 4.1.1 / Gradle 기반 백엔드 초기 구조.
 - OpenAPI: http://localhost:8080/v3/api-docs
 
 ## MySQL 연결 및 설정
+현재는 Docker 없이 PC의 MySQL 서버에 `root`로 접속하며, 이 서버에 `mac` DB를 생성해 둔 상태다. AWS RDS for MySQL은 향후 운영 환경에서만 사용하며 아직 구축하지 않았다. 환경 구분·SQL 적용·검증 계획은 [DB 환경 문서](docs/DATABASE.md)를 따른다.
+
 `src/main/resources/application-local.yml`에 DB 주소·계정·비밀번호를 둔다.
 이 파일은 `.gitignore` 대상이며 배포 JAR에서도 제외한다.
 새 환경에서는 `application-local.yml.example`을 복사해 `application-local.yml`을 만든다.
 예시에는 비밀번호가 없다. 실제 비밀값을 example 파일에 복사하지 않는다.
 
 ```powershell
-# 명시적으로 mac DB를 없을 때 생성하고 Spring DataSource 연결 검증. 테이블 생성은 하지 않음.
+# 사용자가 수동 생성한 mac DB에 SELECT로 연결 확인. 자동 DDL 실행 없음.
 .\gradlew.bat mysqlConnectionTest --no-daemon
 # 일반 테스트는 test 프로필로 실행하며 MySQL이 필요하지 않음.
 .\gradlew.bat test bootJar --no-daemon
@@ -62,9 +67,10 @@ Java 17 / Spring Boot 4.1.1 / Gradle 기반 백엔드 초기 구조.
 | 이메일 | Spring Mail |
 | 문서·운영 | springdoc Swagger UI, Actuator |
 | 개발 | Lombok, configuration processor |
-| 테스트 | Spring Boot test starters, JUnit, Security test, MySQL Testcontainers |
+| 테스트 | Spring Boot test starters, JUnit, Security test, 로컬 MySQL mac |
 
-기본 테스트는 Docker/DB 없이 실행한다. mysqlConnectionTest는 로컬 MySQL을 사용하며, 업무 데이터 계층 통합 테스트는 추후 Testcontainers로 추가한다.
+기본 테스트는 Docker/DB 없이 실행한다. mysqlConnectionTest는 로컬 MySQL을 사용한다.
+`./gradlew.bat mysqlIntegrationTest --no-daemon`은 사용자가 수동 관리하는 로컬 `mac`에서 실행한다. UUID 테스트 데이터만 생성·정리하며 자동 DDL을 실행하지 않는다.
 
 ## Git 공유 범위
 소스 코드, 빌드 설정, 비밀값 없는 환경 설정 예시와 협업용 실행 안내를 공유한다.
