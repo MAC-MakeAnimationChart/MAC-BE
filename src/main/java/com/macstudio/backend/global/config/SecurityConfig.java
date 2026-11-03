@@ -37,7 +37,7 @@ public class SecurityConfig {
                     auth.requestMatchers(HttpMethod.GET, "/api/v1/health", "/actuator/health").permitAll();
                     auth.requestMatchers(HttpMethod.POST, "/api/v1/auth/email/send-code", "/api/v1/auth/email/verify",
                             "/api/v1/auth/signup", "/api/v1/auth/login", "/api/v1/auth/social",
-                            "/api/v1/auth/refresh", "/api/v1/auth/logout").permitAll();
+                            "/api/v1/auth/password/reset", "/api/v1/auth/refresh", "/api/v1/auth/logout").permitAll();
                     if (docsEnabled) {
                         auth.requestMatchers("/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html").permitAll();
                     }

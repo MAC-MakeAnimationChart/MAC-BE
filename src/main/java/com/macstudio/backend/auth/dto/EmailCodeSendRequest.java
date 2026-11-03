@@ -15,7 +15,7 @@ public record EmailCodeSendRequest(
         String email,
 
         @NotBlank
-        @Pattern(regexp = "signup")
+        @Pattern(regexp = "signup|password_reset")
         String purpose
 ) {
     /** 이메일의 앞뒤 공백과 대소문자를 정리한 뒤 검증받도록 한다. */

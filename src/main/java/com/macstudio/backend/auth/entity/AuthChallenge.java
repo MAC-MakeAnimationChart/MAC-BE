@@ -93,6 +93,24 @@ public class AuthChallenge {
         return challenge;
     }
 
+    /** 활성 이메일 회원과 현재 인증 버전에 묶인 비밀번호 재설정 코드 기록을 만든다. */
+    public static AuthChallenge createPasswordResetEmail(Member member, byte[] codeDigest,
+                                                          Instant now, Instant codeExpiresAt) {
+        Objects.requireNonNull(member, "member");
+        requireNormalizedEmail(member.getEmail());
+        var challenge = new AuthChallenge();
+        challenge.member = member;
+        challenge.authVersion = member.getAuthVersion();
+        challenge.createdAt = utc(now);
+        challenge.codeExpiresAt = futureTime(codeExpiresAt, challenge.createdAt);
+        challenge.codeDigest = copyDigest(codeDigest);
+        challenge.targetEmail = member.getEmail();
+        challenge.purpose = AuthPurpose.PASSWORD_RESET;
+        challenge.method = AuthMethod.EMAIL_CODE;
+        challenge.status = AuthChallengeStatus.PENDING;
+        return challenge;
+    }
+
     /** 연결된 소셜 신원 확인 직후 회원 탈퇴에 사용할 짧은 일회성 증명을 만든다. */
     public static AuthChallenge createSocialReauth(Member member, IdentityProvider provider,
                                                     byte[] proofTokenHash, Instant now, Instant proofExpiresAt) {
@@ -151,6 +169,22 @@ public class AuthChallenge {
                 || !targetEmail.equals(normalizedEmail)
                 || time.isBefore(createdAt) || !time.isBefore(proofExpiresAt)) {
             throw new IllegalStateException("Signup proof is not consumable");
+        }
+        status = AuthChallengeStatus.CONSUMED;
+    }
+
+    /** 회원·이메일·인증 버전에 결합된 비밀번호 재설정 증명을 한 번만 소비한다. */
+    public void consumePasswordResetProof(Member currentMember, String normalizedEmail, Instant now) {
+        Objects.requireNonNull(currentMember, "currentMember");
+        requireNormalizedEmail(normalizedEmail);
+        LocalDateTime time = utc(now);
+        if (purpose != AuthPurpose.PASSWORD_RESET || method != AuthMethod.EMAIL_CODE
+                || status != AuthChallengeStatus.VERIFIED || member == null
+                || !Objects.equals(member.getId(), currentMember.getId())
+                || !Objects.equals(authVersion, currentMember.getAuthVersion())
+                || !targetEmail.equals(normalizedEmail)
+                || time.isBefore(createdAt) || !time.isBefore(proofExpiresAt)) {
+            throw new IllegalStateException("Password reset proof is not consumable");
         }
         status = AuthChallengeStatus.CONSUMED;
     }

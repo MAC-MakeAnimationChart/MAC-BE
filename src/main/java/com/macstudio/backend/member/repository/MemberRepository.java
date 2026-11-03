@@ -14,6 +14,11 @@ public interface MemberRepository extends JpaRepository<Member,Long> {
     // 이메일 로그인 시 회원 조회
     Optional<Member> findByEmail(String email);
 
+    /** 비밀번호 재설정과 이메일 기반 회원 상태 변경을 회원 단위로 직렬화한다. */
+    @org.springframework.data.jpa.repository.Lock(jakarta.persistence.LockModeType.PESSIMISTIC_WRITE)
+    @org.springframework.data.jpa.repository.Query("select m from Member m where m.email = :email")
+    Optional<Member> findByEmailForUpdate(@org.springframework.data.repository.query.Param("email") String email);
+
     // 인증코드 발송 가입 시 이메일 중복 사전 검사
     boolean existsByEmail(String email);
 }

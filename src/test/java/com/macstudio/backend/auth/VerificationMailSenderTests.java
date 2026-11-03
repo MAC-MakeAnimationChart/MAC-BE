@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.*;
 
 import com.macstudio.backend.auth.service.VerificationMailSender;
+import com.macstudio.backend.auth.entity.AuthPurpose;
 import jakarta.mail.Session;
 import jakarta.mail.internet.MimeMessage;
 import java.io.ByteArrayOutputStream;
@@ -34,5 +35,26 @@ class VerificationMailSenderTests {
         message.writeTo(raw);
         String source = raw.toString(StandardCharsets.UTF_8);
         assertThat(source).contains("multipart/mixed", "multipart/alternative", "text/plain", "text/html", "694623");
+    }
+
+    /** 비밀번호 재설정 메일은 가입 환영 문구 대신 목적이 분명한 안내를 사용한다. */
+    @Test
+    void createsPasswordResetEmail() throws Exception {
+        JavaMailSender javaMailSender = mock(JavaMailSender.class);
+        @SuppressWarnings("unchecked")
+        ObjectProvider<JavaMailSender> provider = mock(ObjectProvider.class);
+        MimeMessage message = new MimeMessage(Session.getInstance(new Properties()));
+        when(provider.getIfAvailable()).thenReturn(javaMailSender);
+        when(javaMailSender.createMimeMessage()).thenReturn(message);
+        var sender = new VerificationMailSender(provider, "noreply@example.com");
+
+        sender.send("member@example.com", "382910", 300, AuthPurpose.PASSWORD_RESET);
+
+        verify(javaMailSender).send(message);
+        assertThat(message.getSubject()).isEqualTo("🔐 MAC Studio 비밀번호 재설정 인증코드");
+        ByteArrayOutputStream raw = new ByteArrayOutputStream();
+        message.writeTo(raw);
+        assertThat(raw.toString(StandardCharsets.UTF_8))
+                .contains("multipart/alternative", "text/plain", "text/html", "382910");
     }
 }

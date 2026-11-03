@@ -3,7 +3,7 @@
 기준일: 2026-10-27 (Asia/Seoul)
 
 > 2026-10-31 회원·인증 확장안은 [ERD 검토 문서](AUTH_ERD_REVIEW.md)를 참고한다.
-> 아래 member/인증 스키마는 종전 기준이다. 최신 ERD와 [가입·로그인 AUTH 명세](AUTH_API.md)를 우선한다. 2026-11-03 현재 이메일 AUTH API 코드는 작성되었으나 로컬 mac 통합 검증 완료이며 [구현 상태 점검](IMPLEMENTATION_STATUS.md)을 따른다.
+> 아래 member/인증 스키마는 종전 기준이다. 최신 ERD와 [가입·로그인 AUTH 명세](AUTH_API.md)를 우선한다. 2026-11-04 현재 이메일 AUTH와 이메일 탈퇴는 로컬 mac 통합 검증 완료이며 [구현 상태 점검](IMPLEMENTATION_STATUS.md)을 따른다.
 
 이 문서는 프론트엔드·백엔드 개발자가 공유하는 설계 기준이다. **설계 확정은 구현 완료를 의미하지 않는다.** 실제 제공 중인 API와 구현 예정 사항을 구분한다. 실행 방법과 환경 설정은 [README](../README.md)를 참고한다.
 
@@ -11,11 +11,11 @@
 
 | 영역 | 상태 |
 |---|---|
-| Spring Boot 프로젝트, 도메인별 패키지 | 준비 완료. health 외 업무 도메인은 대부분 패키지만 존재 |
+| Spring Boot 프로젝트, 도메인별 패키지 | 준비 완료. health와 auth/member는 구현, dataset/chart/storage는 패키지 뼈대만 존재 |
 | JWT 검증 기반 | HS256, issuer, audience, exp, sub 검증 및 BCrypt 구성 완료 |
-| 로컬 MySQL | root로 접속하는 mac에 8테이블 존재 확인. Member/MemberConsent/MemberIdentity/AuthChallenge 엔티티·저장소 구현. mac에서 데이터 계층 검증, 정식 migration 미구현 |
+| 로컬 MySQL | root로 접속하는 mac에 8테이블 존재. Member/MemberConsent/MemberIdentity/AuthChallenge/RefreshToken/OAuthTransaction 매핑 validate와 이메일 흐름 통합 검증 완료, 정식 migration 미구현 |
 | 운영 DB | AWS RDS for MySQL 사용 예정. 아직 구축·연결하지 않음. [DB 환경 기준](DATABASE.md) 참고 |
-| 회원가입·이메일/소셜 인증·로그인·재발급·로그아웃 | EMAIL 흐름 로컬 mac 통합 검증 완료. SOCIAL code 교환/가입/재인증 코드 구현 완료, 수동 DB ALTER·실제 제공사 검증 대기 |
+| 회원가입·이메일/소셜 인증·로그인·비밀번호 재설정·재발급·로그아웃 | EMAIL 흐름·비밀번호 재설정·이메일 탈퇴는 로컬 mac 통합 검증 완료. SOCIAL code 교환/가입/재인증은 코드·단위 테스트 완료, 실제 제공사·소셜 DB 업무 흐름 검증 대기 |
 | 데이터셋·차트 CRUD, revision 충돌 처리 | 미구현 |
 | S3 데이터·썸네일 저장 및 삭제 재시도 | 설계 단계. 실제 AWS 연결 미검증 |
 | Swagger / 기본 HTTP·Security 테스트 | 제공 중. 업무 API 연동 완료를 의미하지 않음 |
@@ -32,7 +32,9 @@
 - MVP 차트 종류는 BAR / LINE / PIE다.
 - 결제·구독·유료 플랜, 팀 공유, 휴지통·버전 복원, 서버 차트 렌더링은 MVP에서 제외한다.
 
-## 3. 핵심 ERD — 확정 설계, 아직 DB 적용 전
+## 3. 핵심 ERD — 제품 관계 기준
+
+로컬 mac에는 member/dataset/chart를 포함한 8개 테이블이 존재한다. 아래 관계와 dataset/chart 필드는 제품 기준이지만 dataset/chart 업무 코드는 미구현이며, 실제 전체 제약 일치는 정식 migration 작성 시 다시 검증한다. 회원·인증의 최신 상세 컬럼은 [회원·인증 ERD](AUTH_ERD_REVIEW.md)를 우선한다.
 
 ```mermaid
 erDiagram
@@ -43,6 +45,9 @@ erDiagram
         BIGINT member_id PK
         VARCHAR email UK
         VARCHAR password_hash
+        VARCHAR status
+        BIGINT auth_version
+        DATETIME withdrawn_at
         DATETIME created_at
         DATETIME updated_at
     }
@@ -74,7 +79,7 @@ erDiagram
 
 | 테이블 | 컬럼 및 규칙 |
 |---|---|
-| member | `email VARCHAR(254) UNIQUE NOT NULL`, `password_hash VARCHAR(255) NOT NULL` |
+| member | `email VARCHAR(254) UNIQUE NULL`, `password_hash VARCHAR(255) NULL`, `status/auth_version/withdrawn_at`; 소셜 회원은 서비스 비밀번호가 없을 수 있음 |
 | dataset | `member_id NOT NULL`, `name VARCHAR(120) NOT NULL`, `storage_key VARCHAR(512) NOT NULL` |
 | dataset | `data_size_bytes BIGINT UNSIGNED`, `row_count/column_count INT UNSIGNED`는 NOT NULL |
 | dataset | `revision BIGINT UNSIGNED NOT NULL DEFAULT 1` |
@@ -101,18 +106,21 @@ erDiagram
 - 현재 프론트와 맞춰 열 index를 사용한다. 열 구조 변경 시 유효 범위를 검증한다.
 - 위 목록은 저장 방향이며 필드별 타입·필수 여부·기본값·범위는 API DTO 구현 시 확정한다.
 
-## 4. 인증·저장 보조 테이블 — 방향 합의, 상세 DDL 미확정
+## 4. 인증·저장 보조 테이블
 
-다음은 핵심 3개 테이블과 구분되는 설계 후보다. 완성된 migration으로 간주하지 않는다.
+인증 테이블은 코드와 로컬 mac에 존재하지만 정식 migration은 아직 없다. 저장 객체 테이블은 후속 설계다.
 
-| 테이블 | 목적 | 컬럼 후보 |
+| 테이블 | 목적 | 상태 |
 |---|---|---|
-| email_verification | 가입 전 이메일 인증, 시도·재발송 제한, 단일 소비 | verification_id, email, code_digest, attempt_count, last_sent_at, expires_at, verified_at, consumed_at |
-| refresh_token | 재발급·회전·폐기·재사용 탐지 | token_id, member_id, token_hash, family_id, issued_at, expires_at, revoked_at, replaced_by_id |
-| storage_object | S3 객체 상태와 삭제 재시도 | object_id, member_id, storage_key, object_type, status, size_bytes, created_at, expires_at, retry_count, next_retry_at |
+| member_identity | 회원과 Google/Kakao/Naver 신원 연결 | 엔티티·저장소·MySQL 데이터 계층 검증 완료 |
+| member_consent | 가입 시 필수 약관 동의 이력 | 엔티티·저장소 및 이메일 가입 흐름 검증 완료 |
+| auth_challenge | 이메일 인증·가입 증명·재인증의 만료/시도/단일 소비 | 엔티티·저장소·MySQL 검증 완료 |
+| refresh_token | 재발급·회전·폐기·재사용 탐지 | 엔티티·저장소와 이메일 흐름 동시성 검증 완료 |
+| oauth_transaction | 제공사 검증 신원과 소셜 가입·재인증 증명 | 엔티티·저장소·단위 테스트 완료, 실제 소셜 DB 업무 흐름 미검증 |
+| storage_object | S3 객체 상태와 삭제 재시도 | Proposed, 미구현 |
 
-- 이메일 인증은 회원 생성 전 발생하므로 member FK를 필수로 두지 않는다. 인증코드 원문 대신 비밀키 기반 digest를 저장한다.
-- refresh token은 원문 대신 해시를 저장한다. `token_hash`는 UNIQUE 방향이다. Redis 도입은 확정하지 않았다.
+- 이메일 인증은 회원 생성 전 발생하므로 auth_challenge의 member FK를 필수로 두지 않는다. 인증코드 원문 대신 HMAC을 저장한다.
+- refresh token은 원문 대신 해시를 저장하며 family 회전·재사용 탐지를 구현했다. Redis는 사용하지 않는다.
 - storage_object의 `storage_key`는 UNIQUE, object_type은 DATASET/THUMBNAIL, 상태는 PENDING/ACTIVE/DELETE_PENDING 방향이다.
 - 삭제 대기 기록은 회원·차트 삭제 CASCADE로 사라지면 안 된다. 객체 관계와 FK 삭제 규칙, 정리 작업의 claim/lease 필드는 구현 전에 확정한다.
 
@@ -128,7 +136,7 @@ erDiagram
 - Refresh는 HttpOnly 쿠키·DB 해시 저장·회전/재사용 탐지. 로그아웃은 현재 family 폐기, 다른 기기는 유지하며 Access 잔여 최대 10분을 허용한다.
 - 로그인 실패는 INVALID_CREDENTIALS로 통일한다. 같은 이메일이라는 이유로 소셜 계정을 자동 병합하지 않는다.
 - 쿠키/Origin/CSRF/CORS를 함께 구현한다. 소셜 신규 가입 증명은 짧은 HttpOnly 쿠키로 전달하고 운영 TTL·SameSite·redirectUri allowlist는 구현 설정으로 확정한다.
-- 이메일 AUTH와 /me는 로컬 통합 검증을 완료했다. 소셜 가입·로그인 및 이메일/소셜 soft delete 탈퇴 코드는 구현됐고 수동 DB ALTER·실제 제공사 통합 검증이 남아 있다. 이메일 비밀번호 복구·재설정·변경은 MVP에서 제외한다.
+- 이메일 AUTH·/me·비밀번호 찾기/재설정·이메일 soft delete 탈퇴는 로컬 통합 검증을 완료했다. 소셜 가입·로그인·soft delete 탈퇴 재인증은 코드와 단위 테스트를 완료했으며 실제 제공사·소셜 DB 업무 흐름 검증이 남아 있다. 로그인 상태의 별도 비밀번호 변경은 후속이다.
 - 회원 탈퇴 후 member 행과 정규화 이메일을 보존하여 동일 이메일 재가입을 차단한다. FE 탈퇴 모달은 `탈퇴 후 동일한 이메일로 다시 가입할 수 없습니다.` 경고를 최종 제출 전에 표시해야 한다.
 
 ## 6. 데이터·썸네일 저장 흐름

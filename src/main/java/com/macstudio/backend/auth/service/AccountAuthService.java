@@ -2,6 +2,8 @@ package com.macstudio.backend.auth.service;
 
 import com.macstudio.backend.auth.config.AuthPolicy;
 import com.macstudio.backend.auth.dto.*;
+import com.macstudio.backend.auth.entity.AuthChallenge;
+import com.macstudio.backend.auth.entity.AuthPurpose;
 import com.macstudio.backend.auth.repository.*;
 import com.macstudio.backend.member.entity.*;
 import com.macstudio.backend.member.repository.*;
@@ -79,6 +81,30 @@ public class AccountAuthService {
             var member = members.findByIdForUpdate(found.get().getId()).orElseThrow(this::credentials);
             if (!member.isActive() || !Objects.equals(member.getPasswordHash(), encoded)) throw credentials();
             return tokens.start(member, clock.instant());
+        });
+    }
+
+    /** 이메일 인증 증명을 소비해 비밀번호를 교체하고 기존 로그인과 다른 재설정 증명을 폐기한다. */
+    public void resetPassword(PasswordResetRequest request) {
+        if (!validEmail(request.email()) || request.verificationToken() == null
+                || request.verificationToken().isBlank()) throw resetProofError();
+        if (request.newPassword().codePointCount(0, request.newPassword().length()) < policy.passwordMinLength()
+                || request.newPassword().getBytes(StandardCharsets.UTF_8).length > 72)
+            throw bad("INVALID_PASSWORD", "비밀번호 길이를 확인해 주세요.");
+        String encoded = passwords.encode(request.newPassword()); // 느린 해싱은 DB 잠금 전에 수행한다.
+        transaction.executeWithoutResult(s -> {
+            var member = members.findByEmailForUpdate(request.email()).orElseThrow(this::resetProofError);
+            if (!member.isActive() || !member.hasPassword()) throw resetProofError();
+            var proof = challenges.findByProofTokenHashForUpdate(crypto.hash(request.verificationToken()))
+                    .orElseThrow(this::resetProofError);
+            try { proof.consumePasswordResetProof(member, request.email(), clock.instant()); }
+            catch (IllegalStateException e) { throw resetProofError(); }
+
+            Instant now = clock.instant();
+            refreshTokens.findAllActiveByMemberId(member.getId()).forEach(token -> token.revoke(now));
+            member.resetPassword(encoded);
+            challenges.findUnconsumedByEmailForUpdate(request.email(), AuthPurpose.PASSWORD_RESET)
+                    .forEach(AuthChallenge::cancel);
         });
     }
 
@@ -191,6 +217,8 @@ public class AccountAuthService {
     private ApiException credentials() { return new ApiException(HttpStatus.UNAUTHORIZED, "INVALID_CREDENTIALS", "이메일 또는 비밀번호를 확인해 주세요."); }
     /** 재발급 거절을 공통 인증 실패로 전달한다. */
     private ApiException refreshError() { return new ApiException(HttpStatus.UNAUTHORIZED, "INVALID_REFRESH_TOKEN", "다시 로그인해 주세요."); }
+    /** 회원 존재·상태·증명 실패를 구분하지 않는 비밀번호 재설정 오류를 반환한다. */
+    private ApiException resetProofError() { return bad("INVALID_PASSWORD_RESET_PROOF", "비밀번호 재설정 인증이 만료되었거나 유효하지 않습니다."); }
     /** 없거나 이미 탈퇴 처리된 회원을 동일한 인증 실패로 반환한다. */
     private ApiException unauthorized() { return new ApiException(HttpStatus.UNAUTHORIZED, "UNAUTHORIZED", "현재 회원을 인증할 수 없습니다."); }
     /** 입력·증명 오류를 생성한다. */

@@ -1,6 +1,6 @@
 # AUTH API 명세 — 확정 범위
 
-설계 기준일: 2026-10-31. 구현 점검: 2026-11-03. **이메일 인증·EMAIL 가입·로그인·Refresh·로그아웃·/me·soft delete 탈퇴와 소셜 code 교환·SOCIAL 가입·소셜 탈퇴 재인증 코드 구현 완료. 소셜은 수동 DB ALTER 및 실제 제공사 연동 검증 전이다.** [현재 상태](IMPLEMENTATION_STATUS.md) 참고.
+설계 기준일: 2026-10-31. 구현 점검: 2026-11-04. **이메일 인증·EMAIL 가입·로그인·비밀번호 찾기/재설정·Refresh·로그아웃·/me·soft delete 탈퇴는 로컬 mac 통합 검증 완료. 소셜 code 교환·SOCIAL 가입·소셜 탈퇴 재인증은 코드와 단위 테스트를 완료했으며 실제 제공사 및 소셜 DB 업무 흐름 검증 전이다.** [현재 상태](IMPLEMENTATION_STATUS.md) 참고.
 FE/BE 공유 기준 문서다. 가입·로그인·유지·로그아웃의 확정 계약과 전체 AUTH 요구사항의 후속 범위를 구분한다.
 ERD는 [회원·인증 ERD](AUTH_ERD_REVIEW.md)를 따른다. API 합의가 DB 적용을 의미하지 않는다.
 
@@ -28,6 +28,7 @@ ERD는 [회원·인증 ERD](AUTH_ERD_REVIEW.md)를 따른다. API 합의가 DB �
 | 이메일 코드 확인 | POST | `/auth/email/verify` | challengeId, code | verificationToken, 유효시간 | 코드 검증 |
 | 이메일·소셜 가입 완료 | POST | `/auth/signup` | signupType, 가입 증명, 필수 약관 동의; EMAIL은 email/password 추가 | 회원 생성·자동 로그인 | 가입 증명 |
 | 이메일 로그인 | POST | `/auth/login` | email, password | Access JWT·회원 정보·Refresh 쿠키 | 자격 증명 |
+| 비밀번호 재설정 | POST | `/auth/password/reset` | email, verificationToken, newPassword | 비밀번호 교체·모든 Refresh 폐기 | password_reset 이메일 증명 |
 | 소셜 code 교환 | POST | `/auth/social` | provider, code, codeVerifier, redirectUri, Naver state | 기존 회원 로그인 200 또는 신규 가입 대기 202 | FE state/PKCE 완료 + BE 제공사 검증 |
 | 소셜 탈퇴 재인증 | POST | `/auth/social/reauth` | 소셜 code 교환과 동일 | 짧은 HttpOnly 재인증 쿠키 | Access JWT + 동일 제공사 신원 |
 | 내 정보 조회 | GET | `/me` | 없음 | 현재 회원 정보 | Access JWT |
@@ -50,7 +51,9 @@ provider는 google/kakao/naver. 신규 소셜 가입 전용 API를 별도로 추
 - BE: 이메일 검증/중복 검사, 인증코드 발송, HMAC 저장, 만료·시도·재발송 제한.
 - FE: 코드 입력 화면·대기시간 표시. 서버 제한을 대체하지 않는다.
 - 재발송 시 해당 이메일·목적의 이전 미소비 인증 결과를 무효화한다.
-- 이미 가입된 서비스 이메일은 409 EMAIL_ALREADY_USED. 로그인 오류 통일과 별개인 가입 중복 정책이다.
+- `purpose`는 가입 `signup` 또는 비밀번호 찾기 `password_reset`이다.
+- 가입 목적에서 이미 가입된 서비스 이메일은 409 EMAIL_ALREADY_USED. 로그인 오류 통일과 별개인 가입 중복 정책이다.
+- 재설정 목적은 회원 존재 여부를 노출하지 않도록 미가입·탈퇴·소셜 전용 이메일에도 동일한 200 구조를 반환하지만 메일과 유효한 증명은 만들지 않는다.
 
 ### POST /auth/email/verify
 
@@ -60,7 +63,7 @@ provider는 google/kakao/naver. 신규 소셜 가입 전용 API를 별도로 추
 
 성공 200. verificationToken과 expiresIn(초)을 반환한다. 코드 예시는 실제 인증코드가 아니다.
 - 이메일 인증만 완료하고 회원은 생성하지 않는다.
-- 가입 증명은 인증한 이메일의 가입에만 사용할 수 있다. 이미 성공한 코드를 반복 소비해 증명을 계속 발급하지 않는다.
+- 증명은 발급 목적과 인증한 이메일에만 사용할 수 있다. 이미 성공한 코드를 반복 소비해 증명을 계속 발급하지 않는다.
 - 이메일을 바꾸면 이전 이메일의 증명은 사용할 수 없다.
 - FE는 verify → signup을 연속 호출해도 되며 별도 화면을 추가할 필요는 없다.
 - 코드 오입력 1회로 인증 화면을 종료하지 않는다. `400 INVALID_VERIFICATION`이면 같은 challengeId로 입력을 다시 받되, FE도 제출 횟수를 제한하고 한도 도달·만료 시 재발송 흐름으로 안내한다. 실제 시도 횟수와 challenge 취소는 BE가 최종 통제한다.
@@ -144,7 +147,34 @@ FE 처리:
 HTTP 401. BE는 존재 여부나 연결 제공사를 실패 응답으로 구분하지 않으며 FE도 원인별 안내를 만들지 않는다.
 DELETING 회원에게 토큰을 발급하지 않는다.
 
-## 6. 소셜 가입·로그인
+## 6. 비밀번호 찾기·재설정
+
+이 흐름은 서비스 비밀번호가 있는 ACTIVE 이메일 회원만 대상으로 한다. FE는 로그인 실패 화면에서 비밀번호 찾기로 이동시킨 뒤 아래 순서로 호출한다.
+
+1. `POST /auth/email/send-code`에 `{"email":"user@example.com","purpose":"password_reset"}` 전송.
+2. 수신 코드를 기존 `POST /auth/email/verify`에 전송하여 목적에 결합된 `verificationToken` 획득.
+3. 새 비밀번호를 FE에서 두 번 입력받아 일치 여부를 확인하고, 일치한 값 하나만 다음 API로 전송.
+
+### POST /auth/password/reset
+
+```json
+{
+  "email":"user@example.com",
+  "verificationToken":"<비밀번호 재설정 증명>",
+  "newPassword":"<새 비밀번호>"
+}
+```
+
+성공은 `204 No Content`이며 자동 로그인하지 않는다. FE는 증명과 비밀번호 입력을 메모리에서 제거하고 새 비밀번호로 로그인하도록 안내한다.
+
+- BE는 증명의 목적·회원·이메일·`auth_version`·만료·미소비 상태를 잠금 아래 검증하고 한 번만 소비한다.
+- 새 비밀번호는 가입과 같은 정책으로 검사하고 BCrypt 해시만 저장한다. 확인 비밀번호는 UX용이므로 BE 요청에 포함하지 않는다.
+- 성공 시 `auth_version`을 증가시키고 해당 회원의 모든 Refresh 토큰과 남은 비밀번호 재설정 증명을 폐기한다.
+- 이미 발급된 Access JWT는 최대 10분까지 서명상 유효할 수 있다. 보호 API는 현재 ACTIVE 상태와 `auth_version`을 확인한다.
+- 증명 만료·재사용·대상 불일치는 `400 INVALID_PASSWORD_RESET_PROOF`로 통일한다.
+- 코드/증명/비밀번호 원문을 로그나 영구 저장소에 남기지 않는다.
+
+## 7. 소셜 가입·로그인
 
 ### FE 책임
 
@@ -220,7 +250,7 @@ email은 제공사가 신뢰 가능한 이메일을 제공하지 않으면 null�
 - 이메일 중복 검사보다 기존 소셜 연결 조회가 먼저다. 가입 최종 시점에도 중복을 다시 검사한다.
 - 로그인 후 명시적 소셜 연결/해제는 후속 계정 관리 기능이다.
 
-## 7. 내 정보·재발급·로그아웃
+## 8. 내 정보·재발급·로그아웃
 
 | API | 성공 | BE 처리 | FE 처리 |
 |---|---|---|---|
@@ -234,7 +264,7 @@ email은 제공사가 신뢰 가능한 이메일을 제공하지 않으면 null�
 - Refresh 재사용은 해당 family 폐기로 처리하며, 이전 토큰 기록은 감지에 필요한 기간 보존한다.
 - HTTPS Secure/HttpOnly 쿠키 및 Origin/CSRF 방어 코드가 작성되어 있다. 현재 코드 값은 위 공통 계약과 구현 상태 문서를 따르며 운영 도메인·쿠키 정책 검증은 아직 필요하다.
 
-## 8. 회원 탈퇴
+## 9. 회원 탈퇴
 
 ### POST /auth/withdraw
 
@@ -274,7 +304,7 @@ Bearer Access JWT, 정확한 허용 Origin, `X-Requested-With: MAC`, JSON 본문
 - public 로그인 code 교환과 민감 작업 재인증을 같은 인증 조건으로 섞지 않기 위해 별도 경로로 둔다.
 - 현재 BE가 보장하는 것은 `탈퇴 시점에 새로 교환한 code의 provider+subject가 현재 연결과 동일함`이다. Naver는 강제 비밀번호 재입력 파라미터를 공식 API에서 제공하지 않고, Google도 계정 세션에 따라 비밀번호 입력이 생략될 수 있다. 제공사별 강한 최근 인증 시각 보장은 OIDC `auth_time` 검증 등 별도 강화 범위다.
 
-## 9. FE/BE 책임 요약
+## 10. FE/BE 책임 요약
 
 | 항목 | BE | FE |
 |---|---|---|
@@ -283,13 +313,14 @@ Bearer Access JWT, 정확한 허용 Origin, `X-Requested-With: MAC`, JSON 본문
 | 인증 증명 | 해시·목적·대상·만료·단일 소비 | 임시 보관, 변경 이메일에 재사용 금지 |
 | 소셜 | code 교환·제공사 신원 검증·임시 상태·중복 방지 | 팝업·callback·state/PKCE 검증·약관 화면·가입 요청 |
 | 로그인 | Access/Refresh 발급, 오류 통일 | 메모리 Access·Bearer 요청·통일된 오류 표시 |
+| 비밀번호 찾기 | 회원 존재를 숨긴 발송 응답, 목적 결합 증명, BCrypt 교체·전체 Refresh 폐기 | 코드 입력, 새 비밀번호 2회 일치 확인, 성공 후 재로그인 |
 | 로그아웃 | 현재 family 폐기·쿠키 삭제 | 메모리 로그인 상태 제거 |
 | 회원 탈퇴 | 재인증·회원 soft delete·전체 Refresh 폐기·동일 이메일 재가입 차단 | 재가입 불가 경고·명시적 확인·성공 후 로그인 상태 제거 |
 
-## 10. 후속 AUTH 범위와 미확정 세부값
+## 11. 후속 AUTH 범위와 미확정 세부값
 
-2026-11-03 MVP 범위 결정에 따라 다음을 구분한다.
-- 이메일 회원의 비밀번호 찾기/재설정/변경은 MVP에서 제외하고 출시 이후 필요성을 다시 검토한다.
+2026-11-04 MVP 범위 결정에 따라 다음을 구분한다.
+- 이메일 회원의 로그인 실패 후 비밀번호 찾기/재설정은 구현됐다. 로그인 상태에서의 별도 비밀번호 변경 API는 후속이다.
 - 소셜 회원은 서비스 비밀번호를 사용하지 않으므로 최초 비밀번호 설정·변경·복구 기능을 만들지 않는다.
 - 회원 탈퇴 인증 API와 소셜 제공사 재인증 코드는 구현됐다. 실제 제공사 연동 검증과 데이터셋/S3 정리 및 실패 재시도는 후속이다.
 - 회원 탈퇴 완료 후 member 행은 hard delete하지 않고 soft delete 상태와 탈퇴 시각을 보존한다. 모든 로그인과 토큰 발급을 거절한다.

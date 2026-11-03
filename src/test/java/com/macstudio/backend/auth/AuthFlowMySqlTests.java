@@ -51,7 +51,7 @@ class AuthFlowMySqlTests extends LocalMySqlTestSupport {
         mvc = MockMvcBuilders.webAppContextSetup(context).apply(springSecurity()).build();
         remote = "test-" + UUID.randomUUID();
         doAnswer(call -> { codes.put(call.getArgument(0), call.getArgument(1)); return null; })
-                .when(mail).send(anyString(), anyString(), anyLong());
+                .when(mail).send(anyString(), anyString(), anyLong(), any());
     }
 
     /** 테스트가 등록한 UUID 이메일의 인증·회원만 정리한다. 기존 데이터/스키마는 변경하지 않는다. */
@@ -116,7 +116,7 @@ class AuthFlowMySqlTests extends LocalMySqlTestSupport {
     void failedMailCancelsChallengeAndCooldownRemains() throws Exception {
         String email = email();
         doThrow(new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "MAIL_SEND_FAILED", "발송 실패"))
-                .when(mail).send(eq(email), anyString(), anyLong());
+                .when(mail).send(eq(email), anyString(), anyLong(), any());
         assertThat(postJson("/email/send-code", Map.of("email", email, "purpose", "signup")).getResponse().getStatus()).isEqualTo(503);
         assertThat(jdbc.queryForObject("SELECT status FROM auth_challenge WHERE target_email = ?", String.class, email)).isEqualTo("CANCELLED");
         assertThat(postJson("/email/send-code", Map.of("email", email, "purpose", "signup")).getResponse().getStatus()).isEqualTo(429);
@@ -207,6 +207,50 @@ class AuthFlowMySqlTests extends LocalMySqlTestSupport {
                 .getResponse().getStatus()).isEqualTo(409);
         assertThat(mvc.perform(get("/api/v1/me").header("Authorization", "Bearer " + access))
                 .andReturn().getResponse().getStatus()).isEqualTo(401);
+    }
+
+    /** 비밀번호 재설정 증명은 한 번만 쓰며 비밀번호와 모든 Refresh 세션을 함께 교체한다. */
+    @Test
+    void passwordResetChangesPasswordAndRevokesEveryRefreshSession() throws Exception {
+        String email = email();
+        var signup = postJson("/signup", signupRequest(email, verify(email)));
+        assertThat(signup.getResponse().getStatus()).isEqualTo(201);
+        Cookie signupRefresh = cookie(signup);
+        Cookie loginRefresh = cookie(postJson("/login", Map.of("email", email, "password", PASSWORD)));
+
+        var sent = postJson("/email/send-code", Map.of("email", email, "purpose", "password_reset"));
+        assertThat(sent.getResponse().getStatus()).isEqualTo(200);
+        var verified = postJson("/email/verify", Map.of(
+                "challengeId", body(sent).get("challengeId").asText(), "code", codes.get(email)));
+        assertThat(verified.getResponse().getStatus()).isEqualTo(200);
+        String proof = body(verified).get("verificationToken").asText();
+        String changed = "Changed-password-827!";
+
+        var reset = postJson("/password/reset", Map.of(
+                "email", email, "verificationToken", proof, "newPassword", changed));
+        assertThat(reset.getResponse().getStatus()).isEqualTo(204);
+        assertThat(postJson("/login", Map.of("email", email, "password", PASSWORD))
+                .getResponse().getStatus()).isEqualTo(401);
+        assertThat(postJson("/login", Map.of("email", email, "password", changed))
+                .getResponse().getStatus()).isEqualTo(200);
+        assertThat(postCookie("/refresh", signupRefresh).getResponse().getStatus()).isEqualTo(401);
+        assertThat(postCookie("/refresh", loginRefresh).getResponse().getStatus()).isEqualTo(401);
+        var replay = postJson("/password/reset", Map.of(
+                "email", email, "verificationToken", proof, "newPassword", "Another-password-918!"));
+        assertThat(replay.getResponse().getStatus()).isEqualTo(400);
+        assertThat(body(replay).get("code").asText()).isEqualTo("INVALID_PASSWORD_RESET_PROOF");
+    }
+
+    /** 가입 여부를 노출하지 않도록 미가입 이메일도 같은 성공 형태로 응답하고 메일은 보내지 않는다. */
+    @Test
+    void passwordResetSendHidesUnknownEmail() throws Exception {
+        String unknown = email();
+        var sent = postJson("/email/send-code", Map.of("email", unknown, "purpose", "password_reset"));
+        assertThat(sent.getResponse().getStatus()).isEqualTo(200);
+        assertThat(body(sent).get("challengeId").asText()).matches("[0-9]+");
+        assertThat(codes).doesNotContainKey(unknown);
+        assertThat(jdbc.queryForObject(
+                "SELECT COUNT(*) FROM auth_challenge WHERE target_email = ?", Integer.class, unknown)).isZero();
     }
 
     /** 실제 MVC/보안 체인에서 Origin 누락·잘못된 메서드·형식을 올바른 상태로 반환한다. */

@@ -1,6 +1,6 @@
-# 구현 상태 — 2026-11-03
+# 구현 상태 — 2026-11-04
 
-이메일 인증 시작 → 코드 확인 → 회원 DB 저장 → 로그인 흐름의 1차 구현과 로컬 mac 통합 검증을 완료했다.
+이메일 인증 시작 → 코드 확인 → 회원 DB 저장 → 로그인과 로그인 실패 후 비밀번호 재설정 흐름의 구현·로컬 mac 통합 검증을 완료했다.
 
 ## 구현 범위
 
@@ -10,6 +10,7 @@
 | POST /api/v1/auth/email/verify | 코드·만료·횟수 검사, 가입 증명 발급 |
 | POST /api/v1/auth/signup | 증명 소비·필수 약관 검증·회원/동의 저장·자동 로그인 |
 | POST /api/v1/auth/login | BCrypt 비밀번호 및 ACTIVE 상태 확인, 토큰 발급 |
+| POST /api/v1/auth/password/reset | password_reset 증명 소비, BCrypt 비밀번호 교체, 모든 Refresh 폐기 |
 | POST /api/v1/auth/social | 제공사 code 교환, 기존 소셜 회원 로그인 또는 신규 가입 대기 쿠키 발급 |
 | POST /api/v1/auth/refresh | Refresh 회전, 재사용 시 해당 family 폐기 |
 | POST /api/v1/auth/logout | 현재 family 폐기·쿠키 삭제 |
@@ -25,9 +26,13 @@ DTO는 요청/응답 전용이며 entity와 분리했다. Controller → Service
 - member 상태를 WITHDRAWN으로 바꾸고 withdrawn_at을 기록하며 auth_version을 증가시킨다. 정규화 이메일은 보존한다.
 - 모든 활성 Refresh Token을 폐기하고 Refresh 쿠키를 삭제한다.
 - 소셜 계정은 먼저 `/auth/social/reauth`에서 동일 provider+subject를 확인한 일회성 쿠키를 받아야 한다.
-- 필요한 member ALTER SQL은 기존 SQL 파일을 수정하지 않고 사용자에게 별도 컨텍스트로 전달한다. 자동 실행하지 않았다.
+- 스키마는 사용자 수동 SQL로 관리한다. 2026-11-04 현재 로컬 mac에서 JPA validate와 탈퇴 통합 시나리오가 통과하며, 테스트가 DDL을 자동 실행하지는 않는다.
 
 ## 이번 보완
+
+- 이메일 로그인 실패 후 `password_reset` 코드 발송 → 공통 verify → 비밀번호 교체 API 흐름 구현.
+- 회원 존재 여부를 숨기는 동일 발송 응답, 목적 결합 HMAC, 회원·이메일·auth_version 결합 일회성 증명 적용.
+- 재설정 성공 시 auth_version 증가, 모든 Refresh와 다른 재설정 증명 폐기. 자동 로그인은 하지 않는다.
 
 - DB 없는 smoke 테스트의 신규 서비스 의존성 대체.
 - Origin 누락 시 403, 필터 URL 판별을 실제 요청 URI 기준으로 통일.
@@ -48,8 +53,8 @@ DTO는 요청/응답 전용이며 entity와 분리했다. Controller → Service
 ## 실제 검증
 
 - `gradlew.bat test bootJar --no-daemon --offline`: BUILD SUCCESSFUL, 기본 21개 통과, JAR 생성 성공.
-- 최신 `gradlew.bat test bootJar --no-daemon`: BUILD SUCCESSFUL, 기본 28개 통과 및 JAR 생성. 소셜 분기/보안 경계/가입/탈퇴 증명과 HTML+plain 인증메일 MIME 생성 검증 포함.
-- `mysqlIntegrationTest`: 최신 실행의 XML 결과 16개 모두 통과(회원 연결 4, 인증 상태 5, 전체 흐름 7). 해당 실행은 당시 필터 단위 테스트 1개 때문에 전체 Gradle은 실패였으며, 단위 테스트 URI 설정 보완 후 위 기본 테스트를 재실행해 통과했다. 통합 테스트 이후 제품 코드는 변경하지 않았다.
+- 2026-11-04 `gradlew.bat test bootJar --no-daemon --rerun-tasks`: BUILD SUCCESSFUL, 기본 29개 통과(실패·오류·건너뜀 0) 및 JAR 생성. 목적 분리 HMAC과 가입/재설정 HTML+plain 인증메일 MIME 생성 검증 포함.
+- 2026-11-04 `gradlew.bat mysqlIntegrationTest --no-daemon --rerun-tasks`: BUILD SUCCESSFUL, 19개 통과(회원 연결 4, 인증 상태 5, 전체 흐름 10; 실패·오류·건너뜀 0). 비밀번호 재설정·증명 재사용 차단·모든 Refresh 폐기·회원 존재 비노출과 이메일 탈퇴까지 포함한다.
 - 전체 흐름: 오입력 횟수 커밋, 증명 단일 소비, 필수 약관 오류 후 재시도, 발송 실패 취소/쿨다운, BCrypt 저장, JWT /me, 삭제 중 회원 거절, 로그인 오류 통일, 로그아웃, Refresh 회전·재사용·동시 요청, 잘못된 HTTP 요청.
 - 메일 전송만 대체 객체로 실행. 실제 컨트롤러·서비스·JWT·로컬 MySQL 사용. UUID 테스트 소유 데이터만 롤백/정리.
 - `scripts/Test-EmailMemberFlow.ps1`, `Test-SocialAuthBoundaries.ps1`, `Test-SocialMemberFlow.ps1`을 추가했다. 실제 SMTP 코드/provider code를 입력해 PowerShell에서 순차 실행하는 수동 시나리오이며 아직 실행 결과를 통과로 기록하지 않는다.
@@ -60,4 +65,4 @@ DTO는 요청/응답 전용이며 entity와 분리했다. Controller → Service
 
 TTL·횟수 제한·약관 v1은 개발 기본값이다. IP 제한은 단일 인스턴스 메모리 기반이며 운영 다중 인스턴스/프록시 정책은 후속이다. 실제 SMTP 전송은 DB 트랜잭션과 원자적이지 않다.
 
-이메일/소셜 회원 탈퇴와 소셜 가입·로그인·재인증 코드는 구현됐지만 새 member 및 oauth_transaction 스키마를 로컬 mac에 적용하지 않아 MySQL 통합 검증은 대기 중이다. 실제 Google/Kakao/Naver 자격 증명, 제공사 콘솔 callback, 브라우저 쿠키/팝업 연동도 미검증이다. dataset/S3 삭제·재시도는 미구현이며 소셜 계정은 서비스 비밀번호가 없는 간편 로그인으로 운영한다. 이메일 회원의 비밀번호 찾기·재설정·변경은 MVP에서 제외한다. 기존 SQL 파일·DB·프론트엔드·RDS·커밋·푸시는 변경하지 않았다.
+현재 로컬 mac 스키마는 매핑된 member 및 oauth_transaction 컬럼에 대한 JPA validate를 통과한다. 이메일 탈퇴와 비밀번호 찾기·재설정은 MySQL 통합 검증까지 완료했지만 소셜 가입·로그인·재인증은 단위 테스트만 완료했으며, 실제 Google/Kakao/Naver 자격 증명·제공사 API·소셜 DB 업무 흐름·브라우저 쿠키/팝업 연동은 미검증이다. dataset/S3 삭제·재시도와 로그인 상태의 별도 비밀번호 변경 API는 미구현이다. 소셜 계정은 서비스 비밀번호가 없는 간편 로그인으로 운영한다. 이번 구현은 기존 8테이블 구조로 가능해 DDL과 프론트엔드 코드를 변경하지 않았다.

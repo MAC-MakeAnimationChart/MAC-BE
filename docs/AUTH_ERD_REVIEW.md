@@ -1,8 +1,8 @@
 # 회원·인증 ERD 검토안
 
-설계 기준일: 2026-10-31. **사용자 합의 정책 반영 / DDL 검토본.** 로컬 mac 테이블 8개 존재는 2026-11-01 확인했으며 전체 컬럼/제약 적합성은 아직 검증하지 않았다.
+설계 기준일: 2026-10-31. 구현 점검: 2026-11-04. **사용자 합의 정책 반영 / DDL 검토본.** 로컬 mac 테이블 8개와 현재 JPA 매핑은 validate 및 통합 테스트를 통과했다. 다만 JPA validate는 모든 CHECK·UNIQUE·FK 제약의 완전 일치를 보증하지 않는다.
 기준 SQL: 프로젝트 루트 `sql-file.sql`. 필수 인증·약관 동의 후 회원 생성 정책을 반영한다.
-구현 현황(2026-11-03): Member/MemberConsent/MemberIdentity/AuthChallenge/RefreshToken 엔티티·저장소 및 이메일 AUTH API 구현·로컬 mac 통합 검증 완료. OAuth 및 정식 migration 미구현. [구현 상태](IMPLEMENTATION_STATUS.md), [DB 환경](DATABASE.md) 참고.
+구현 현황(2026-11-04): Member/MemberConsent/MemberIdentity/AuthChallenge/RefreshToken/OAuthTransaction 엔티티·저장소와 이메일·소셜 AUTH 코드 구현. 이메일 AUTH·비밀번호 재설정·이메일 탈퇴는 로컬 mac 통합 검증 완료, 소셜은 단위 테스트 완료 후 실제 제공사·소셜 DB 업무 흐름 검증 대기다. 정식 migration은 미구현이다. [구현 상태](IMPLEMENTATION_STATUS.md), [DB 환경](DATABASE.md) 참고.
 기존 MVP_DESIGN.md의 member NOT NULL 및 인증 보조 테이블 설명보다 이 문서의 최신 회원·인증 정의를 우선한다.
 
 ## SQL 선택
@@ -10,8 +10,8 @@
 - `../sql/03_full_schema_review.sql`: mac 스키마에 대상 테이블 8개가 없는 경우의 전체 생성본.
 - `../sql/02_auth_additions_review.sql`: 원본과 정확히 같은 member/dataset/chart가 이미 있는 경우의 변경본. member ALTER + 5개 CREATE.
 - `../sql/04_signup_after_consent_alter_review.sql`: 이전 8테이블 검토안을 이미 적용한 DB용 ALTER. member 상태 변경, OAuth 가입 대기 정보 추가 및 callback 소비 시각 이름 변경.
-- 2026-11-03 소셜 역할 변경으로 기존 02/03/04의 oauth_transaction state/callback/PKCE 컬럼은 목표 구조와 불일치한다. 기존 SQL 파일은 수정하지 않으며 구현 전에 별도 수동 ALTER 컨텍스트를 검토한다.
-- 현재 DB에 맞는 파일 하나만 선택한다. 최신 02/03에는 04의 변경이 이미 포함되어 있으므로 이어서 실행하지 않는다. 현재 DB 스키마·데이터는 조사하거나 변경하지 않았다.
+- 2026-11-03 소셜 역할 변경으로 기존 02/03/04의 oauth_transaction state/callback/PKCE 컬럼은 현재 코드의 목표 구조와 불일치한다. 이 파일들은 과거 검토본이므로 현재 DB에 그대로 실행할 migration으로 사용하지 않는다. 2026-11-04 현재 로컬 mac은 코드 매핑 validate를 통과하며, 향후 정식 migration 작성 시 실제 스키마를 기준으로 차이를 다시 산출한다.
+- 새 환경을 검토할 때만 현재 DB 상태에 맞는 파일 하나를 참고한다. 최신 02/03에는 04의 변경이 이미 포함되어 있으므로 이어서 실행하지 않는다. 이 문서 교차검증에서는 DDL을 실행하거나 DB 스키마를 변경하지 않았다.
 - 04 실행 전 PENDING_TERMS 행이 없어야 한다. 남아 있다면 동의 증거와 데이터를 확인하여 별도 전환 계획을 세워야 한다. 자동 활성화·삭제하지 않으며 새 CHECK가 해당 행이 있으면 member ALTER를 거절한다. 02로 기존 회원에 ACTIVE를 추가하는 경우에도 실제 약관 동의 이력 점검이 선행되어야 한다.
 - CREATE DATABASE, DROP, 데이터 삭제, 자동 Flyway 실행은 포함하지 않는다. DDL은 트랜잭션 ROLLBACK을 전제로 실행할 수 없다.
 - MySQL 8.0.16 이상(기존 환경 기록 8.0.33 기준). 연결마다 UTC 설정이 필요하며 SQL의 SET SESSION은 해당 연결에만 적용된다.
@@ -137,8 +137,8 @@ erDiagram
 - 기존 email/password_hash만 NULL 허용으로 바꾸고 status/auth_version을 추가한다.
 - email: 검증된 서비스 이메일만 저장. 공백 제거·소문자화 정책을 서버에서 일관되게 적용. 기존 대소문자 비구분 collation과 UNIQUE 유지. 소셜 이메일이 없거나 신뢰 불가하면 NULL. 신뢰 가능한 이메일이 기존 회원과 중복되면 신규 가입 거절(충돌 회피를 위해 NULL로 바꾸지 않음). 탈퇴 회원도 이메일을 유지하므로 동일 이메일 재가입은 영구 차단한다.
 - password_hash: BCrypt. 비밀번호가 있으면 email도 있어야 한다는 CHECK 적용. 이메일만 있고 비밀번호가 없는 소셜 회원은 허용.
-- status: 코드 기준 ACTIVE / DELETING / WITHDRAWN이며 기본값은 ACTIVE다. `withdrawn_at DATETIME(3) NULL`은 WITHDRAWN일 때만 값이 존재한다. 로컬 DB DDL은 아직 수동 적용 전이다. 최초 가입용 PENDING_TERMS는 제거한다. 이메일·소셜 모두 필수 인증과 약관 동의 완료 후에만 회원을 생성한다.
-- auth_version: 비밀번호 재설정·이메일 변경 등 보안 변경 시 증가. JWT/인증 증명 발급 당시 값과 현재 값을 비교해야 실제 무효화가 된다. 현재 JWT 설정에 이미 구현되어 있다는 뜻이 아니다.
+- status: 코드 기준 ACTIVE / DELETING / WITHDRAWN이며 기본값은 ACTIVE다. `withdrawn_at DATETIME(3) NULL`은 WITHDRAWN일 때만 값이 존재한다. 2026-11-04 로컬 mac에서 해당 매핑과 이메일 탈퇴 흐름을 검증했다. 최초 가입용 PENDING_TERMS는 제거한다. 이메일·소셜 모두 필수 인증과 약관 동의 완료 후에만 회원을 생성한다.
+- auth_version: 비밀번호 재설정·이메일 변경 등 보안 변경 시 증가. 현재 JWT 필터와 회원 대상 인증 증명은 발급 당시 값과 현재 값을 비교하며, 비밀번호 재설정에서 증가·검증한다.
 - 이메일 검증 시각, 이름, 프로필, 전화번호, last_login_at은 제외.
 
 ### member_identity

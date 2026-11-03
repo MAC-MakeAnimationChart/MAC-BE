@@ -1,6 +1,7 @@
 package com.macstudio.backend.auth.service;
 
 import com.macstudio.backend.global.exception.ApiException;
+import com.macstudio.backend.auth.entity.AuthPurpose;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
@@ -23,6 +24,10 @@ public class VerificationMailSender {
     }
     /** SMTP 요청을 제출하고 실패 시 내부 서버 정보 대신 공통 오류만 전달한다. */
     public void send(String email, String code, long expiresIn) {
+        send(email, code, expiresIn, AuthPurpose.SIGNUP);
+    }
+    /** 인증 목적에 맞는 제목과 안내를 사용해 SMTP 요청을 제출한다. */
+    public void send(String email, String code, long expiresIn, AuthPurpose purpose) {
         JavaMailSender mailSender = sender.getIfAvailable();
         if (mailSender == null || from.isBlank()) throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE,
                 "MAIL_NOT_CONFIGURED", "메일 발송 설정이 필요합니다.");
@@ -32,8 +37,8 @@ public class VerificationMailSender {
                     StandardCharsets.UTF_8.name());
             helper.setFrom(from);
             helper.setTo(email);
-            helper.setSubject("🎉 MAC Studio에 오신 걸 환영해요!");
-            helper.setText(plainText(code, expiresIn), htmlText(code, expiresIn));
+            helper.setSubject(subject(purpose));
+            helper.setText(plainText(code, expiresIn, purpose), htmlText(code, expiresIn, purpose));
             mailSender.send(message);
         }
         catch (MessagingException | MailException e) {
@@ -43,7 +48,19 @@ public class VerificationMailSender {
     }
 
     /** HTML을 표시하지 않는 메일 클라이언트를 위한 동일 내용의 안전한 대체 본문. */
-    private String plainText(String code, long expiresIn) {
+    private String plainText(String code, long expiresIn, AuthPurpose purpose) {
+        if (purpose == AuthPurpose.PASSWORD_RESET) return """
+                MAC Studio 비밀번호 재설정
+
+                비밀번호 재설정을 요청하셨습니다.
+                아래 인증코드를 화면에 입력해 주세요.
+
+                인증코드: %s
+                유효시간: %s
+
+                인증코드는 한 번만 사용할 수 있으며 다른 사람에게 알려주면 안 됩니다.
+                본인이 요청하지 않았다면 이 메일을 안전하게 무시해 주세요.
+                """.formatted(code, expiryLabel(expiresIn));
         return """
                 🎉 MAC Studio에 오신 걸 환영해요!
 
@@ -62,7 +79,19 @@ public class VerificationMailSender {
     }
 
     /** 외부 이미지·스크립트 없이 주요 메일 클라이언트에서 읽기 쉬운 가입 인증 안내를 만든다. */
-    private String htmlText(String code, long expiresIn) {
+    private String htmlText(String code, long expiresIn, AuthPurpose purpose) {
+        String title = purpose == AuthPurpose.PASSWORD_RESET
+                ? "🔐 비밀번호 재설정" : "🎉 MAC Studio에 오신 걸 환영해요!";
+        String introduction = purpose == AuthPurpose.PASSWORD_RESET
+                ? "비밀번호 재설정을 요청하셨습니다.<br>아래 인증코드를 화면에 입력해 주세요."
+                : "반가워요! 👋<br>데이터를 멋진 차트로 바꾸는 여정을 함께 시작해 볼까요?<br>회원가입을 마치려면 아래 인증코드를 화면에 입력해 주세요.";
+        String codeLabel = purpose == AuthPurpose.PASSWORD_RESET ? "비밀번호 재설정 인증코드" : "✨ 이메일 인증코드";
+        String closing = purpose == AuthPurpose.PASSWORD_RESET
+                ? "인증이 끝나면 새 비밀번호를 설정할 수 있습니다."
+                : "인증을 마치고 MAC Studio에서 만나요! 🚀";
+        String ignore = purpose == AuthPurpose.PASSWORD_RESET
+                ? "🛡️ 본인이 비밀번호 재설정을 요청하지 않았다면 별도 조치 없이 이 메일을 안전하게 무시해 주세요."
+                : "🛡️ 본인이 회원가입을 요청하지 않았다면 별도 조치 없이 이 메일을 안전하게 무시해 주세요.";
         return """
                 <!doctype html>
                 <html lang="ko">
@@ -77,20 +106,18 @@ public class VerificationMailSender {
                           </tr>
                           <tr>
                             <td style="padding:36px 32px 12px;font-size:24px;font-weight:700;line-height:1.4;">
-                              🎉 MAC Studio에 오신 걸 환영해요!
+                              %s
                             </td>
                           </tr>
                           <tr>
                             <td style="padding:0 32px;color:#59616b;font-size:15px;line-height:1.8;">
-                              반가워요! 👋<br>
-                              데이터를 멋진 차트로 바꾸는 여정을 함께 시작해 볼까요?<br>
-                              회원가입을 마치려면 아래 인증코드를 화면에 입력해 주세요.
+                              %s
                             </td>
                           </tr>
                           <tr>
                             <td style="padding:28px 32px 18px;">
                               <div style="padding:22px;text-align:center;background:#f1f5ff;border:1px solid #d9e3ff;border-radius:12px;">
-                                <div style="margin-bottom:8px;color:#667085;font-size:13px;">✨ 이메일 인증코드</div>
+                                <div style="margin-bottom:8px;color:#667085;font-size:13px;">%s</div>
                                 <div style="font-size:34px;font-weight:800;letter-spacing:8px;color:#3156d3;">%s</div>
                               </div>
                             </td>
@@ -99,12 +126,12 @@ public class VerificationMailSender {
                             <td style="padding:0 32px 30px;color:#59616b;font-size:14px;line-height:1.8;">
                               ⏰ 이 코드는 <strong>%s</strong> 동안 유효하며 한 번만 사용할 수 있습니다.<br>
                               🔐 보안을 위해 인증코드를 다른 사람에게 알려주지 마세요.<br><br>
-                              인증을 마치고 MAC Studio에서 만나요! 🚀
+                              %s
                             </td>
                           </tr>
                           <tr>
                             <td style="padding:20px 32px;background:#fafbfc;border-top:1px solid #edf0f2;color:#7a828c;font-size:12px;line-height:1.7;">
-                              🛡️ 본인이 회원가입을 요청하지 않았다면 별도 조치 없이 이 메일을 안전하게 무시해 주세요.<br>
+                              %s<br>
                               이 메일은 발신 전용입니다.
                             </td>
                           </tr>
@@ -113,7 +140,14 @@ public class VerificationMailSender {
                     </table>
                   </body>
                 </html>
-                """.formatted(code, expiryLabel(expiresIn));
+                """.formatted(title, introduction, codeLabel, code, expiryLabel(expiresIn), closing, ignore);
+    }
+
+    /** 메일함에서 회원가입과 비밀번호 재설정 목적을 즉시 구분할 수 있는 제목을 반환한다. */
+    private String subject(AuthPurpose purpose) {
+        return purpose == AuthPurpose.PASSWORD_RESET
+                ? "🔐 MAC Studio 비밀번호 재설정 인증코드"
+                : "🎉 MAC Studio에 오신 걸 환영해요!";
     }
 
     /** 초 단위 설정을 메일에서 읽기 쉬운 분/초 문구로 표시한다. */

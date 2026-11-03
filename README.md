@@ -3,7 +3,7 @@
 Java 17 / Spring Boot 4.1.1 / Gradle 기반 백엔드 초기 구조.
 도메인별 controller → service → repository 및 dto/entity를 사용한다.
 
-**2026-11-03 이메일 인증·가입·로그인·Refresh·로그아웃 및 /me는 로컬 mac 통합 검증 완료. 이메일/소셜 soft delete 탈퇴와 소셜 가입·로그인·재인증 코드는 구현됐으며 수동 스키마 적용·MySQL/실제 제공사 통합 검증은 남아 있다. [구현 상태](docs/IMPLEMENTATION_STATUS.md) 참고. 실제 SMTP·브라우저 검증 및 데이터셋/차트/S3 API는 후속 범위다.**
+**2026-11-04 이메일 인증·가입·로그인·비밀번호 찾기/재설정·Refresh·로그아웃·/me와 이메일 soft delete 탈퇴는 로컬 mac 통합 검증 완료. 소셜 가입·로그인·탈퇴 재인증은 코드와 단위 테스트를 완료했으며 실제 제공사·소셜 DB 업무 흐름·브라우저 연동 검증은 남아 있다. [구현 상태](docs/IMPLEMENTATION_STATUS.md) 참고. 실제 SMTP 검증 및 데이터셋/차트/S3 API는 후속 범위다.**
 
 전체 패키지·클래스·메서드 역할과 DTO/엔티티 경계는 [백엔드 구조 문서](docs/BACKEND_STRUCTURE.md)를 참고한다.
 

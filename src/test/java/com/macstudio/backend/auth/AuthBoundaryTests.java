@@ -2,6 +2,7 @@ package com.macstudio.backend.auth;
 
 import com.macstudio.backend.auth.config.AuthRequestFilter;
 import com.macstudio.backend.auth.service.AuthCrypto;
+import com.macstudio.backend.auth.entity.AuthPurpose;
 import com.macstudio.backend.global.exception.ApiException;
 import java.time.*;
 import java.util.List;
@@ -61,6 +62,9 @@ class AuthBoundaryTests {
         assertThat(crypto.token()).matches("[A-Za-z0-9_-]{43}");
         assertThat(java.util.Arrays.equals(crypto.codeDigest("a@example.com", "123456"),
                 crypto.codeDigest("b@example.com", "123456"))).isFalse();
+        assertThat(java.util.Arrays.equals(crypto.codeDigest(AuthPurpose.SIGNUP, "a@example.com", "123456"),
+                crypto.codeDigest(AuthPurpose.PASSWORD_RESET, "a@example.com", "123456"))).isFalse();
+        assertThat(crypto.decoyChallengeId()).matches("[0-9]+");
         assertThatThrownBy(() -> new AuthCrypto("").codeDigest("a@example.com", "123456"))
                 .isInstanceOf(ApiException.class);
     }

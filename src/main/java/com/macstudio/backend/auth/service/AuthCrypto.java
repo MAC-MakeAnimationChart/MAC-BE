@@ -1,6 +1,7 @@
 package com.macstudio.backend.auth.service;
 
 import com.macstudio.backend.global.exception.ApiException;
+import com.macstudio.backend.auth.entity.AuthPurpose;
 import java.nio.charset.StandardCharsets;
 import java.security.*;
 import java.util.Base64;
@@ -34,12 +35,22 @@ public class AuthCrypto {
     public byte[] randomBytes(int count) { byte[] value = new byte[count]; random.nextBytes(value); return value; }
     /** 목적·이메일·코드를 함께 HMAC하여 다른 이메일의 코드 해시 재사용을 막는다. */
     public byte[] codeDigest(String email, String code) {
+        return codeDigest(AuthPurpose.SIGNUP, email, code);
+    }
+    /** 목적·이메일·코드를 함께 HMAC하여 다른 인증 흐름의 코드 해시 재사용을 막는다. */
+    public byte[] codeDigest(AuthPurpose purpose, String email, String code) {
         if (key == null) throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "AUTH_NOT_CONFIGURED", "인증 설정이 필요합니다.");
         try {
             Mac mac = Mac.getInstance("HmacSHA256");
             mac.init(new SecretKeySpec(key, "HmacSHA256"));
-            return mac.doFinal(("SIGNUP\u0000" + email + "\u0000" + code).getBytes(StandardCharsets.UTF_8));
+            return mac.doFinal((purpose.name() + "\u0000" + email + "\u0000" + code).getBytes(StandardCharsets.UTF_8));
         } catch (GeneralSecurityException e) { throw new IllegalStateException("HMAC unavailable"); }
+    }
+    /** 회원 존재 여부를 숨기는 발송 응답에 사용할 실제 DB ID와 충돌 가능성이 낮은 양수 ID를 만든다. */
+    public String decoyChallengeId() {
+        long value;
+        do { value = random.nextLong() & Long.MAX_VALUE; } while (value == 0);
+        return Long.toString(value);
     }
     /** 충분한 난수를 가진 증명·Refresh 원문을 SHA-256으로 변환한다. */
     public byte[] hash(String value) {

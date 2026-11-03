@@ -61,6 +61,12 @@ public class AuthController {
     public ResponseEntity<AuthResponse> login(@Valid @RequestBody LoginRequest request) {
         return authenticated(service.login(request), HttpStatus.OK);
     }
+    /** 이메일 인증 증명으로 비밀번호를 교체한다. 성공 후 사용자는 새 비밀번호로 다시 로그인한다. */
+    @PostMapping("/password/reset")
+    public ResponseEntity<Void> resetPassword(@Valid @RequestBody PasswordResetRequest request) {
+        service.resetPassword(request);
+        return ResponseEntity.noContent().cacheControl(CacheControl.noStore()).build();
+    }
     /** Refresh 쿠키를 회전하고 거절된 쿠키는 삭제한다. */
     @PostMapping("/refresh")
     public ResponseEntity<AuthResponse> refresh(@CookieValue(name = REFRESH_COOKIE, required = false) String refresh,

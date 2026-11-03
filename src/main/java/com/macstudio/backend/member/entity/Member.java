@@ -156,6 +156,16 @@ public class Member {
         return passwordHash != null && !passwordHash.isBlank();
     }
 
+    /** 이메일 인증이 끝난 활성 이메일 회원의 비밀번호를 교체하고 이전 인증 증명을 무효화한다. */
+    public void resetPassword(String encodedPassword) {
+        Objects.requireNonNull(encodedPassword, "encodedPassword");
+        if (!isActive() || !hasPassword() || encodedPassword.isBlank() || encodedPassword.length() > 255) {
+            throw new IllegalStateException("Password cannot be reset for this member");
+        }
+        passwordHash = encodedPassword;
+        authVersion++;
+    }
+
     /** 최초 저장 시 생성·수정 시각을 동일한 UTC 밀리초로 기록한다. */
     @PrePersist
     private void prePersist() {
