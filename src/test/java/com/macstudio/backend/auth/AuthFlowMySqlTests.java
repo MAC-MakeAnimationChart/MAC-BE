@@ -3,6 +3,7 @@ package com.macstudio.backend.auth;
 import com.macstudio.backend.auth.service.*;
 import com.macstudio.backend.global.exception.ApiException;
 import com.macstudio.backend.member.repository.MemberRepository;
+import com.macstudio.backend.member.service.WithdrawnMemberPurgeService;
 import com.macstudio.backend.support.LocalMySqlTestSupport;
 import jakarta.servlet.http.Cookie;
 import java.util.*;
@@ -37,6 +38,7 @@ class AuthFlowMySqlTests extends LocalMySqlTestSupport {
     @Autowired JdbcTemplate jdbc;
     @Autowired PlatformTransactionManager manager;
     @Autowired AccountAuthService accounts;
+    @Autowired WithdrawnMemberPurgeService memberPurge;
     @MockitoBean VerificationMailSender mail;
     private MockMvc mvc;
     private final JsonMapper json = JsonMapper.builder().build();
@@ -180,9 +182,9 @@ class AuthFlowMySqlTests extends LocalMySqlTestSupport {
         } finally { start.countDown(); pool.shutdownNow(); pool.awaitTermination(20, TimeUnit.SECONDS); }
     }
 
-    /** 탈퇴는 이메일을 보존한 soft delete이며 모든 로그인과 동일 이메일 재가입을 차단한다. */
+    /** 탈퇴 즉시 로그인을 막고 3개월 후 회원과 데이터셋·차트를 CASCADE 파기해 재가입을 허용한다. */
     @Test
-    void withdrawalSoftDeletesMemberAndBlocksEmailReuse() throws Exception {
+    void withdrawalRetainsThenPurgesMemberAndAllowsEmailReuse() throws Exception {
         String email = email();
         var signup = postJson("/signup", signupRequest(email, verify(email)));
         assertThat(signup.getResponse().getStatus()).isEqualTo(201);
@@ -207,6 +209,32 @@ class AuthFlowMySqlTests extends LocalMySqlTestSupport {
                 .getResponse().getStatus()).isEqualTo(409);
         assertThat(mvc.perform(get("/api/v1/me").header("Authorization", "Bearer " + access))
                 .andReturn().getResponse().getStatus()).isEqualTo(401);
+
+        long memberId = member.getId();
+        jdbc.update("INSERT INTO dataset "
+                        + "(member_id, creation_request_id, name, data_schema_version, data_json, "
+                        + "data_size_bytes, row_count, column_count, revision) "
+                        + "VALUES (?, UUID_TO_BIN(?), ?, 1, ?, 37, 1, 1, 1)",
+                memberId, UUID.randomUUID().toString(), "purge-" + UUID.randomUUID(),
+                "{\"headers\":[\"value\"],\"rows\":[[1]]}");
+        Long datasetId = jdbc.queryForObject("SELECT dataset_id FROM dataset WHERE member_id = ?", Long.class, memberId);
+        jdbc.update("INSERT INTO chart (dataset_id, title, chart_type, figure_schema_version, figure_json) "
+                        + "VALUES (?, '', 'BAR', 1, ?)", datasetId, "{\"x\":\"value\"}");
+
+        jdbc.update("UPDATE member SET withdrawn_at = DATE_SUB(DATE_SUB(UTC_TIMESTAMP(3), INTERVAL 3 MONTH), INTERVAL 1 SECOND) "
+                + "WHERE member_id = ?", memberId);
+        assertThat(jdbc.queryForObject("SELECT purge_due_at <= UTC_TIMESTAMP(3) FROM member WHERE member_id = ?",
+                Boolean.class, memberId)).isTrue();
+
+        var purge = memberPurge.purgeDueMembers(100);
+        assertThat(purge).isEqualTo(new WithdrawnMemberPurgeService.PurgeResult(1, 1, 0, 0));
+        assertThat(members.findById(memberId)).isEmpty();
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM dataset WHERE member_id = ?", Integer.class, memberId)).isZero();
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM chart WHERE dataset_id = ?", Integer.class, datasetId)).isZero();
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM auth_challenge WHERE target_email = ?", Integer.class, email)).isZero();
+
+        assertThat(postJson("/email/send-code", Map.of("email", email, "purpose", "signup"))
+                .getResponse().getStatus()).isEqualTo(200);
     }
 
     /** 비밀번호 재설정 증명은 한 번만 쓰며 비밀번호와 모든 Refresh 세션을 함께 교체한다. */

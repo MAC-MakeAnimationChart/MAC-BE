@@ -8,6 +8,7 @@ import java.util.Optional;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.repository.query.Param;
 
 /** 서비스의 트랜잭션 안에서 인증 기록을 잠그고 조회한다. 엔티티를 API로 반환하지 않는다. */
@@ -33,4 +34,9 @@ public interface AuthChallengeRepository extends JpaRepository<AuthChallenge, Lo
             + "com.macstudio.backend.auth.entity.AuthChallengeStatus.VERIFIED) order by c.id")
     List<AuthChallenge> findUnconsumedByEmailForUpdate(@Param("email") String normalizedEmail,
                                                       @Param("purpose") AuthPurpose purpose);
+
+    /** 회원 FK가 없는 가입·재설정 임시 기록에서 파기 대상 이메일을 제거한다. */
+    @Modifying
+    @Query("delete from AuthChallenge c where c.member is null and c.targetEmail = :email")
+    int deleteUnboundByTargetEmail(@Param("email") String normalizedEmail);
 }

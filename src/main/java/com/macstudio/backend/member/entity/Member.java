@@ -61,6 +61,10 @@ public class Member {
     @Column(name = "withdrawn_at", columnDefinition = "DATETIME(3)")
     private LocalDateTime withdrawnAt;
 
+    @Column(name = "purge_due_at", insertable = false, updatable = false,
+            columnDefinition = "DATETIME(3)")
+    private LocalDateTime purgeDueAt;
+
     @Column(
             name = "created_at",
             nullable = false,
@@ -139,7 +143,7 @@ public class Member {
     }
 
 
-    /** 데이터 정리 이후 회원 행과 이메일을 보존한 채 탈퇴 완료 상태로 전환한다. */
+    /** 3개월 보관이 시작되는 탈퇴 완료 시각을 기록하고 회원을 이용 불가 상태로 전환한다. */
     public void completeWithdrawal(java.time.Instant withdrawnAt) {
         Objects.requireNonNull(withdrawnAt, "withdrawnAt");
         if (status != MemberStatus.DELETING) {

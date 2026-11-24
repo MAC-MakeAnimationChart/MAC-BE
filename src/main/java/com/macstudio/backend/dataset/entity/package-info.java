@@ -1,2 +1,2 @@
-/** dataset entity layer. Business implementation is pending; see .ai/STATE.md. */
+/** 데이터셋 영속 엔티티를 제공한다. */
 package com.macstudio.backend.dataset.entity;

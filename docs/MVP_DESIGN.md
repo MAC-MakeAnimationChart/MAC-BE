@@ -1,5 +1,15 @@
 # MAC Studio MVP 설계 및 프론트엔드 연동 기준
 
+## 2026-11-18 데이터셋·차트 저장 계약 — 아래 충돌 문구보다 우선
+
+- FE가 CSV/XLSX 파싱과 `data_json` 내부 schema를 소유하고 `data_schema_version`으로 호환성을 관리한다. BE는 JSON 문법/크기·인증·소유권·revision을 검증한다.
+- 편집 데이터는 MySQL `dataset.data_json`, 차트 옵션은 `chart.figure_json`, 현재 썸네일만 private S3 `dev/`에 저장한다. 원본 CSV/XLSX는 MVP에서 보관하지 않는다.
+- dataset과 chart에 독립 revision을 둔다. 차트 종류는 프론트 구현을 따르는 `VARCHAR(30)` 문자열이며 SQL/Java enum으로 고정하지 않는다.
+- 데이터셋 편집과 차트 편집을 분리한다. 데이터 변경은 모든 하위 썸네일, 차트 옵션 변경은 해당 썸네일만 무효화한다.
+- dataset 또는 하위 chart 쓰기는 `dataset.updated_at`을 갱신하고 조회는 갱신하지 않는다. 마지막 쓰기 후 90일이 지난 dataset/chart와 연결 S3 썸네일을 정리한다.
+- 별도 S3 delete-job 테이블은 두지 않는다. 90일 정리는 S3 삭제 성공 후 DB를 hard delete하고, 교체 과정에서 남은 미참조 썸네일은 스케줄러가 현재 DB 참조와 비교해 유예 후 삭제한다.
+- 검토용 기존 스키마 ALTER는 `../sql/05_dataset_json_thumbnail_alter_review.sql`이며 자동 실행하지 않는다.
+
 기준일: 2026-10-27 (Asia/Seoul)
 
 > 2026-10-31 회원·인증 확장안은 [ERD 검토 문서](AUTH_ERD_REVIEW.md)를 참고한다.
@@ -93,7 +103,7 @@ erDiagram
 - 이메일은 정규화한다. 구체적인 정규화·collation 정책은 DDL/API 구현 전에 확정한다.
 - 차트 소유자는 `chart → dataset.member_id`로 확인한다. chart에 member_id를 중복 저장하지 않는다.
 - dataset 삭제 시 하위 chart도 삭제하며, S3 삭제 작업을 같은 DB 트랜잭션에 기록한다. chart만 삭제하면 dataset은 유지한다.
-- dataset/chart에는 soft delete 컬럼을 두지 않는다. 회원 탈퇴만 member soft delete로 처리하며 탈퇴 상태·시각과 이메일을 보존한다. 실제 FK 삭제 옵션은 S3 정리 기록 보존을 고려해 migration에서 확정한다.
+- dataset/chart에는 soft delete 컬럼을 두지 않는다. 회원은 탈퇴 즉시 WITHDRAWN으로 전환하고 3개월 뒤 hard delete하며 dataset/chart는 CASCADE한다. S3 삭제 기록은 회원 FK와 독립적으로 보존해야 한다.
 
 ### 차트 설정 JSON
 
@@ -117,12 +127,10 @@ erDiagram
 | auth_challenge | 이메일 인증·가입 증명·재인증의 만료/시도/단일 소비 | 엔티티·저장소·MySQL 검증 완료 |
 | refresh_token | 재발급·회전·폐기·재사용 탐지 | 엔티티·저장소와 이메일 흐름 동시성 검증 완료 |
 | oauth_transaction | 제공사 검증 신원과 소셜 가입·재인증 증명 | 엔티티·저장소·단위 테스트 완료, 실제 소셜 DB 업무 흐름 미검증 |
-| storage_object | S3 객체 상태와 삭제 재시도 | Proposed, 미구현 |
 
 - 이메일 인증은 회원 생성 전 발생하므로 auth_challenge의 member FK를 필수로 두지 않는다. 인증코드 원문 대신 HMAC을 저장한다.
 - refresh token은 원문 대신 해시를 저장하며 family 회전·재사용 탐지를 구현했다. Redis는 사용하지 않는다.
-- storage_object의 `storage_key`는 UNIQUE, object_type은 DATASET/THUMBNAIL, 상태는 PENDING/ACTIVE/DELETE_PENDING 방향이다.
-- 삭제 대기 기록은 회원·차트 삭제 CASCADE로 사라지면 안 된다. 객체 관계와 FK 삭제 규칙, 정리 작업의 claim/lease 필드는 구현 전에 확정한다.
+- S3 삭제 작업용 별도 테이블은 두지 않는다. 현재 썸네일 참조는 `chart.thumbnail_key`가 단일 기준이며, 스케줄러가 `dev/` 객체와 DB 참조를 비교해 미참조 객체를 정리한다.
 
 ## 5. 인증과 프론트엔드 연동
 
@@ -136,33 +144,32 @@ erDiagram
 - Refresh는 HttpOnly 쿠키·DB 해시 저장·회전/재사용 탐지. 로그아웃은 현재 family 폐기, 다른 기기는 유지하며 Access 잔여 최대 10분을 허용한다.
 - 로그인 실패는 INVALID_CREDENTIALS로 통일한다. 같은 이메일이라는 이유로 소셜 계정을 자동 병합하지 않는다.
 - 쿠키/Origin/CSRF/CORS를 함께 구현한다. 소셜 신규 가입 증명은 짧은 HttpOnly 쿠키로 전달하고 운영 TTL·SameSite·redirectUri allowlist는 구현 설정으로 확정한다.
-- 이메일 AUTH·/me·비밀번호 찾기/재설정·이메일 soft delete 탈퇴는 로컬 통합 검증을 완료했다. 소셜 가입·로그인·soft delete 탈퇴 재인증은 코드와 단위 테스트를 완료했으며 실제 제공사·소셜 DB 업무 흐름 검증이 남아 있다. 로그인 상태의 별도 비밀번호 변경은 후속이다.
-- 회원 탈퇴 후 member 행과 정규화 이메일을 보존하여 동일 이메일 재가입을 차단한다. FE 탈퇴 모달은 `탈퇴 후 동일한 이메일로 다시 가입할 수 없습니다.` 경고를 최종 제출 전에 표시해야 한다.
+- 이메일 AUTH·/me·비밀번호 찾기/재설정·탈퇴 후 3개월 DB 파기는 로컬 통합 검증을 완료했다. 소셜 가입·로그인·탈퇴 재인증은 코드와 단위 테스트를 완료했으며 실제 제공사 업무 흐름 검증이 남아 있다.
+- 회원 탈퇴 후 3개월 동안 member 행과 이메일을 보존해 재가입을 차단하고, 기한 경과 파기 후 재가입을 허용한다. FE는 기간과 파기 정책을 제출 전에 표시해야 한다.
 
 ## 6. 데이터·썸네일 저장 흐름
 
-MySQL에는 소유권·메타데이터·차트 설정 JSON·저장 객체 상태를 둔다. S3에는 **편집 후 현재 headers/rows JSON과 썸네일 이미지**를 둔다. 원본 CSV/XLSX만 저장해서는 편집 상태를 복원할 수 없다.
+MySQL에는 소유권·메타데이터·현재 편집 데이터 JSON·차트 설정 JSON을 둔다. S3에는 **현재 차트 썸네일 이미지**만 둔다. 원본 CSV/XLSX는 MVP에서 저장하지 않는다.
 
 ```text
 브라우저에서 파일 파싱·표 편집·차트 구성
   → 로그인 후 저장 요청
   → 서버에서 소유권·형식·용량 검증
-  → 서버가 고유 객체 키와 PENDING 기록 생성
-  → 변경된 데이터/썸네일을 S3에 업로드
-  → 짧은 DB 트랜잭션에서 revision·용량 재확인
-  → 참조 교체 + 새 객체 ACTIVE + 이전 객체 DELETE_PENDING + revision 증가
-  → 커밋 후 이전 객체 삭제, 실패하면 재시도
+  → 데이터 JSON과 차트 설정을 MySQL에 저장하고 각각 revision 증가
+  → 선택적 현재 썸네일을 S3 dev/에 업로드
+  → 새 썸네일이 유효하면 chart.thumbnail_key 참조 교체
+  → 이전 키는 best-effort 삭제, 실패한 미참조 객체는 스케줄러가 유예 후 정리
 ```
 
-- MVP는 백엔드 업로드를 기본으로 한다. 사용자가 ACTIVE S3 객체를 직접 덮어쓰거나 삭제하도록 허용하지 않는다.
-- DB에는 URL 대신 object key를 저장한다. 다운로드 URL은 소유권 확인 후 필요할 때 생성한다.
-- dataset과 하위 chart를 하나의 revision 경계로 본다. 차트 변경도 dataset revision/updated_at을 갱신한다.
+- 썸네일은 백엔드 업로드를 기본으로 한다. 사용자가 S3 객체 키를 지정하거나 직접 삭제하도록 허용하지 않는다.
+- DB에는 URL 대신 현재 thumbnail object key를 저장한다. 다운로드 URL은 소유권 확인 후 필요할 때 생성한다.
+- dataset과 chart revision을 분리한다. 차트 변경은 dataset revision을 올리지 않고 dataset.updated_at만 갱신한다.
 - 저장 시 클라이언트의 expectedRevision과 현재 revision을 비교한다. 충돌은 409로 처리하고 무조건 덮어쓰지 않는다. 정확한 요청 DTO와 충돌 화면 동작은 연동 시 확정한다.
-- 업로드 실패·충돌 시 이전 정상 저장 상태를 유지하고 새 객체를 정리한다. 같은 저장 요청의 재시도는 멱등 처리한다.
-- 차트 스타일만 변경하면 해당 썸네일만 교체하고 데이터 JSON은 재업로드하지 않는다.
+- 데이터/차트 저장 충돌 시 이전 정상 DB 상태를 유지한다. 같은 저장 요청의 재시도는 멱등 처리한다.
+- 차트 스타일만 변경하면 해당 썸네일만 교체한다.
 - 데이터가 변경되면 같은 데이터셋의 모든 썸네일을 무효화한다. `thumbnail_key=NULL`은 정상적인 미생성/무효화 상태다.
 - 프론트는 썸네일이 없으면 차트 렌더링 또는 대체 표시를 제공해야 한다. 현재 revision에 맞는 썸네일만 저장한다.
-- 만료된 PENDING과 DELETE_PENDING을 정리하며 현재 참조 중인 객체는 삭제하지 않는다.
+- 스케줄러는 현재 `chart.thumbnail_key`가 참조하는 객체를 삭제하지 않는다. 90일 정리는 S3 삭제 성공 후 dataset을 hard delete하며, 교체 과정의 미참조 객체는 안전 유예기간 후 삭제한다.
 
 ## 7. 화면별 책임과 용량
 

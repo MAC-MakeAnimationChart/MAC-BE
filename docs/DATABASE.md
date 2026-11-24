@@ -1,19 +1,32 @@
 # DB 환경 및 적용 계획
 
-기준일: 2026-11-04. 사용자 최신 지시가 이전 별도 테스트 DB 방침을 대체한다.
+기준일: 2026-11-18. 사용자 최신 지시와 실제 AWS 구성 상태가 이전 RDS 계획 문구를 대체한다.
 
 | 구분 | 현재 | 향후 계획 |
 |---|---|---|
-| 서버 | Docker 없이 PC에 설치한 MySQL | AWS RDS for MySQL |
-| DB | 로컬 개발·통합 테스트 모두 `mac` | 개발 DB와 운영 DB를 구분하여 RDS에 구성 |
-| 계정 | 로컬 root 계정 | 환경별 애플리케이션 계정 |
+| 서버 | Docker 없이 PC에 설치한 MySQL | AWS RDS for MySQL 8.4.11 `mac-mysql` 생성 완료 |
+| DB | 로컬 개발·통합 테스트 모두 `mac` | RDS 안에 `mac_dev`, `mac_prod` 생성 예정 |
+| 계정 | 로컬 root 계정 | RDS 환경별 애플리케이션 계정 생성 예정 |
 | 설정 | Git 제외 application-local.yml | 환경별 외부 비밀값 주입 |
 
-root는 접속 계정이며 mac이 DB 이름이다. RDS 이전 완료 후 로컬 DB를 제거할 계획이다. 이번 작업에서 RDS 구축이나 로컬 DB 삭제는 수행하지 않았다.
+root는 로컬 접속 계정이며 mac이 로컬 DB 이름이다. RDS 인스턴스와 네트워크는 구축했지만 스키마·애플리케이션 계정·테이블은 아직 만들지 않았다. RDS 이전과 검증이 끝난 뒤 로컬 DB 제거를 별도로 결정한다.
+
+## AWS RDS 현재 기준
+
+- 서울 리전, MySQL Community 8.4.11, `db.t4g.micro`, Single-AZ, gp3 20GiB, 최대 50GiB 자동 확장.
+- private DB subnet group을 사용하고 퍼블릭 액세스는 비활성화한다.
+- `mac-rds-sg`는 `mac-app-sg`에서 들어오는 TCP 3306만 허용하며 인터넷 CIDR을 소스로 열지 않는다.
+- 사용자 지정 파라미터 그룹 `mac-mysql84-params`는 `time_zone=Asia/Seoul`, `require_secure_transport=ON`, `character_set_server=utf8mb4`, `collation_server=utf8mb4_0900_ai_ci`를 사용한다.
+- 애플리케이션은 마스터 계정을 사용하지 않는다. `mac_dev_app`, `mac_prod_app`을 분리하고 운영 계정에는 업무 DML만 부여한다.
+- 로컬 PC에서 RDS를 직접 공개 연결하지 않는다. 관리 접속은 EC2와 SSM Session Manager가 준비된 뒤 포트 포워딩을 사용한다.
+- 삭제 방지, 자동 백업 7일, 최종 삭제 시 스냅샷 생성 여부는 운영 전 체크리스트에서 다시 확인한다.
 
 ## 수동 스키마 관리
 
 - CREATE/ALTER/DROP은 사용자가 MySQL에서 직접 실행한다.
+- `sql/06_full_schema_drop_create.sql`은 기존 8개 업무 테이블과 데이터를 모두 삭제하고 최신 최종 구조를 다시 만드는 파괴적 초기화 스크립트다. 백업과 대상 DB 확인 후에만 수동 실행한다.
+- 이미 최신 8테이블을 만든 로컬 DB에는 최초 저장 멱등성 컬럼을 위한 `sql/07_dataset_creation_idempotency_alter_review.sql`을 사전 조회부터 단계별로 적용한다. dataset 행이 있으면 고유 UUID 백필 전 NOT NULL 단계로 진행하지 않는다.
+- 기존 데이터를 보존해야 하는 환경에서는 전체 초기화 스크립트를 사용하지 않고 검토된 단계별 ALTER를 사용한다.
 - 공통 설정은 `spring.flyway.enabled=false`, `spring.sql.init.mode=never`, `spring.jpa.hibernate.ddl-auto=validate`다. validate는 구조 검사만 수행한다.
 - 앱·테스트 자동 DDL 경로는 제거했다. sql/ 검토 파일 및 test/resources/db 참고 SQL은 자동 실행하지 않는다. 이미 적용한 SQL을 재실행하지 않는다.
 - API의 회원·인증·토큰 INSERT/UPDATE는 정상적인 데이터 처리이며 스키마 자동 생성과 다르다.

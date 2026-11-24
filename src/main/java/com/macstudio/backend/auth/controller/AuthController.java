@@ -80,7 +80,7 @@ public class AuthController {
         service.logout(refresh);
         return ResponseEntity.noContent().header(HttpHeaders.SET_COOKIE, cookie("", 0)).build();
     }
-    /** 현재 비밀번호와 경고 확인을 검증하여 회원을 soft delete하고 쿠키를 삭제한다. */
+    /** 현재 비밀번호와 3개월 보관 경고를 확인하여 탈퇴 상태로 전환하고 쿠키를 삭제한다. */
     @PostMapping("/withdraw")
     public ResponseEntity<Void> withdraw(@AuthenticationPrincipal Jwt jwt,
                                          @Valid @RequestBody WithdrawalRequest request,

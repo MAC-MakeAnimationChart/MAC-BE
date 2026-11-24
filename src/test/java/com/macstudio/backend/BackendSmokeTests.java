@@ -39,6 +39,14 @@ class BackendSmokeTests {
     private com.macstudio.backend.auth.service.EmailRequestLock emailRequestLock;
     @org.springframework.test.context.bean.override.mockito.MockitoBean
     private com.macstudio.backend.member.service.MemberService memberService;
+    @org.springframework.test.context.bean.override.mockito.MockitoBean
+    private com.macstudio.backend.member.service.WithdrawnMemberPurgeService withdrawnMemberPurgeService;
+    @org.springframework.test.context.bean.override.mockito.MockitoBean
+    private com.macstudio.backend.dataset.service.DatasetCreationService datasetCreationService;
+    @org.springframework.test.context.bean.override.mockito.MockitoBean
+    private com.macstudio.backend.dataset.service.DatasetUpdateService datasetUpdateService;
+    @org.springframework.test.context.bean.override.mockito.MockitoBean
+    private com.macstudio.backend.chart.service.ChartUpdateService chartUpdateService;
     @LocalServerPort
     private int port;
 
@@ -52,7 +60,10 @@ class BackendSmokeTests {
         var health = get("/api/v1/health", null);
         assertThat(health.statusCode()).isEqualTo(200);
         assertThat(health.body()).contains("mac-studio-backend", "UP");
-        assertThat(get("/v3/api-docs", null).statusCode()).isEqualTo(200);
+        var apiDocs = get("/v3/api-docs", null);
+        assertThat(apiDocs.statusCode()).isEqualTo(200);
+        assertThat(apiDocs.body()).contains("/api/v1/datasets", "/api/v1/charts/{chartId}",
+                "multipart/form-data", "Idempotency-Key", "thumbnail");
         assertThat(get("/swagger-ui/index.html", null).statusCode()).isEqualTo(200);
     }
 

@@ -50,10 +50,26 @@ app:
     enabled: ${S3_ENABLED:false}
     bucket: ${S3_BUCKET:}
     region: ${AWS_REGION:ap-northeast-2}
+    # local은 명명된 AWS CLI 프로필을 사용할 수 있고, 운영에서는 비워 IAM Role 체인을 사용한다.
+    profile: ${AWS_PROFILE:}
+    thumbnail-prefix: ${S3_THUMBNAIL_PREFIX:dev/chart-thumbnails/}
+    orphan-cleanup:
+      # S3 연결·정리 권한과 운영 prefix를 확인한 환경에서만 활성화한다.
+      enabled: ${S3_ORPHAN_CLEANUP_ENABLED:false}
+      cron: ${S3_ORPHAN_CLEANUP_CRON:0 30 3 * * *}
+      grace-hours: ${S3_ORPHAN_CLEANUP_GRACE_HOURS:24}
+      scan-limit: ${S3_ORPHAN_CLEANUP_SCAN_LIMIT:5000}
+      delete-limit: ${S3_ORPHAN_CLEANUP_DELETE_LIMIT:100}
+  member-purge:
+    # S3 삭제 작업이 아직 없으므로 안전하게 기본 비활성화한다.
+    enabled: ${MEMBER_PURGE_ENABLED:false}
+    cron: ${MEMBER_PURGE_CRON:0 0 3 * * *}
+    batch-size: ${MEMBER_PURGE_BATCH_SIZE:100}
   limits:
     guest-upload-bytes: 5242880
     member-upload-bytes: 10485760
     member-storage-bytes: 31457280
+    thumbnail-bytes: ${THUMBNAIL_MAX_BYTES:10485760}
   auth:
     hmac-secret-base64: ${AUTH_HMAC_SECRET_BASE64:}
     mail-from: ${MAIL_FROM:}

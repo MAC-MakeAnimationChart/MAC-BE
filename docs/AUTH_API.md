@@ -1,6 +1,6 @@
 # AUTH API 명세 — 확정 범위
 
-설계 기준일: 2026-10-31. 구현 점검: 2026-11-04. **이메일 인증·EMAIL 가입·로그인·비밀번호 찾기/재설정·Refresh·로그아웃·/me·soft delete 탈퇴는 로컬 mac 통합 검증 완료. 소셜 code 교환·SOCIAL 가입·소셜 탈퇴 재인증은 코드와 단위 테스트를 완료했으며 실제 제공사 및 소셜 DB 업무 흐름 검증 전이다.** [현재 상태](IMPLEMENTATION_STATUS.md) 참고.
+설계 기준일: 2026-10-31. 구현 점검: 2026-11-11. **이메일 인증·EMAIL 가입·로그인·비밀번호 찾기/재설정·Refresh·로그아웃·/me·탈퇴 후 3개월 DB 파기는 로컬 mac 통합 검증 완료. 소셜 code 교환·SOCIAL 가입·소셜 탈퇴 재인증은 코드와 단위 테스트를 완료했으며 실제 제공사 업무 흐름 검증 전이다.** [현재 상태](IMPLEMENTATION_STATUS.md) 참고.
 FE/BE 공유 기준 문서다. 가입·로그인·유지·로그아웃의 확정 계약과 전체 AUTH 요구사항의 후속 범위를 구분한다.
 ERD는 [회원·인증 ERD](AUTH_ERD_REVIEW.md)를 따른다. API 합의가 DB 적용을 의미하지 않는다.
 
@@ -34,7 +34,7 @@ ERD는 [회원·인증 ERD](AUTH_ERD_REVIEW.md)를 따른다. API 합의가 DB �
 | 내 정보 조회 | GET | `/me` | 없음 | 현재 회원 정보 | Access JWT |
 | 토큰 재발급 | POST | `/auth/refresh` | Refresh 쿠키 | 새 Access JWT·회전한 Refresh 쿠키 | Refresh 검증 |
 | 로그아웃 | POST | `/auth/logout` | Refresh 쿠키 | 현재 로그인 종료·쿠키 삭제 | Refresh 쿠키 |
-| 회원 탈퇴 | POST | `/auth/withdraw` | acknowledgeEmailReuseBlocked, 이메일 회원은 password | 회원 soft delete·모든 Refresh 폐기·쿠키 삭제 | Access JWT + 비밀번호 또는 소셜 재인증 쿠키 |
+| 회원 탈퇴 | POST | `/auth/withdraw` | acknowledgeEmailReuseBlocked, 이메일 회원은 password | WITHDRAWN 전환·모든 Refresh 폐기·쿠키 삭제 | Access JWT + 비밀번호 또는 소셜 재인증 쿠키 |
 
 provider는 google/kakao/naver. 신규 소셜 가입 전용 API를 별도로 추가하지 않는다.
 
@@ -286,13 +286,14 @@ Bearer Access JWT, 정확한 허용 Origin, `X-Requested-With: MAC`, JSON 본문
 
 - 현재 비밀번호를 BCrypt로 재확인한다. 불일치는 `401 INVALID_CREDENTIALS`다.
 - `acknowledgeEmailReuseBlocked`는 반드시 true여야 하며 누락/false는 `400 INVALID_REQUEST`다.
-- 회원 행을 `WITHDRAWN`으로 전환하고 `withdrawn_at`을 UTC로 기록한다. 이메일과 회원 행은 삭제하지 않는다.
+- 회원 행을 `WITHDRAWN`으로 전환하고 `withdrawn_at`을 UTC로 기록한다. DB가 달력 기준 3개월 뒤 `purge_due_at`을 계산한다.
 - 회원의 모든 활성 Refresh Token을 폐기하고 `auth_version`을 증가시킨다.
 - 탈퇴 회원은 로그인·refresh·`/me`를 사용할 수 없다. 기존 Access JWT 서명 자체는 최대 10분 유효할 수 있으므로 모든 보호 업무 서비스는 ACTIVE 회원 상태를 확인해야 한다.
 - 동일 이메일의 코드 발송과 가입은 기존 중복 정책인 `409 EMAIL_ALREADY_USED`로 거절한다.
 - 서비스 비밀번호가 없는 소셜 계정은 먼저 `/auth/social/reauth`를 완료해야 한다. 유효한 재인증 쿠키가 없거나 만료·소비됐으면 `400 SOCIAL_REAUTH_REQUIRED`다.
-- 현재 구현은 인증 soft delete와 토큰 폐기까지다. dataset/S3 삭제·재시도는 해당 저장 기능 구현 전까지 완료된 것으로 간주하지 않는다.
-- FE 탈퇴 모달은 `탈퇴 후 동일한 이메일로 다시 가입할 수 없습니다.` 경고를 최종 제출 전에 표시하고 확인값을 true로 전송한다.
+- 3개월 동안 이메일과 회원 행을 보관해 동일 이메일 가입을 거절한다. 기한 경과 후 스케줄러가 회원과 연결 DB 데이터를 hard delete하며 재가입을 허용한다.
+- dataset/chart DB CASCADE는 검증했지만 S3 객체 삭제·재시도는 저장 기능 구현 전까지 완료된 것으로 간주하지 않는다. S3 사용 전 파기 스케줄러를 활성화하지 않는다.
+- FE 탈퇴 모달은 `탈퇴 후 계정정보는 3개월간 보관되며 해당 기간 동안 동일 이메일로 재가입할 수 없습니다.`를 표시하고 확인값을 true로 전송한다.
 
 ### POST /auth/social/reauth
 
@@ -315,7 +316,7 @@ Bearer Access JWT, 정확한 허용 Origin, `X-Requested-With: MAC`, JSON 본문
 | 로그인 | Access/Refresh 발급, 오류 통일 | 메모리 Access·Bearer 요청·통일된 오류 표시 |
 | 비밀번호 찾기 | 회원 존재를 숨긴 발송 응답, 목적 결합 증명, BCrypt 교체·전체 Refresh 폐기 | 코드 입력, 새 비밀번호 2회 일치 확인, 성공 후 재로그인 |
 | 로그아웃 | 현재 family 폐기·쿠키 삭제 | 메모리 로그인 상태 제거 |
-| 회원 탈퇴 | 재인증·회원 soft delete·전체 Refresh 폐기·동일 이메일 재가입 차단 | 재가입 불가 경고·명시적 확인·성공 후 로그인 상태 제거 |
+| 회원 탈퇴 | 재인증·WITHDRAWN 전환·전체 Refresh 폐기·3개월 후 DB 파기 | 3개월 보관/재가입 제한 경고·명시적 확인·성공 후 로그인 상태 제거 |
 
 ## 11. 후속 AUTH 범위와 미확정 세부값
 
@@ -323,9 +324,9 @@ Bearer Access JWT, 정확한 허용 Origin, `X-Requested-With: MAC`, JSON 본문
 - 이메일 회원의 로그인 실패 후 비밀번호 찾기/재설정은 구현됐다. 로그인 상태에서의 별도 비밀번호 변경 API는 후속이다.
 - 소셜 회원은 서비스 비밀번호를 사용하지 않으므로 최초 비밀번호 설정·변경·복구 기능을 만들지 않는다.
 - 회원 탈퇴 인증 API와 소셜 제공사 재인증 코드는 구현됐다. 실제 제공사 연동 검증과 데이터셋/S3 정리 및 실패 재시도는 후속이다.
-- 회원 탈퇴 완료 후 member 행은 hard delete하지 않고 soft delete 상태와 탈퇴 시각을 보존한다. 모든 로그인과 토큰 발급을 거절한다.
-- 탈퇴 회원의 정규화 이메일은 재가입 차단을 위해 보존하며, 이메일 코드 발송과 `/auth/signup` 모두 `409 EMAIL_ALREADY_USED`로 거절한다. 동일 이메일 재가입을 허용하지 않는다.
-- FE 탈퇴 확인 모달은 최종 제출 전에 `탈퇴 후 동일한 이메일로 다시 가입할 수 없습니다.` 경고를 명확히 표시해야 한다. 이 경고는 API 오류에만 의존하지 않는 필수 연동 요구사항이다.
+- 탈퇴 즉시 WITHDRAWN과 탈퇴 시각을 기록하고 모든 로그인과 토큰 발급을 거절한다.
+- 정규화 이메일은 3개월 동안 보존하며 이메일 코드 발송과 `/auth/signup`을 `409 EMAIL_ALREADY_USED`로 거절한다. 파기 이후 동일 이메일 재가입을 허용한다.
+- FE 탈퇴 확인 모달은 3개월 보관기간과 해당 기간의 재가입 제한을 명확히 표시해야 한다.
 - 이메일 변경 및 새 주소 인증.
 - 소셜 연결/해제, 마지막 로그인 수단 보호.
 - 회원 탈퇴 외 민감 작업 재인증.

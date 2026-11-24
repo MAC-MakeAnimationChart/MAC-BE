@@ -26,7 +26,7 @@ class AccountWithdrawalTests {
     private static final String PASSWORD = "Current-password-493!";
     private static final Instant NOW = Instant.parse("2026-11-03T00:00:00Z");
 
-    /** 현재 비밀번호 확인 후 모든 Refresh를 폐기하고 이메일을 유지한 WITHDRAWN 상태로 전환한다. */
+    /** 현재 비밀번호 확인 후 모든 Refresh를 폐기하고 3개월 보관용 WITHDRAWN 상태로 전환한다. */
     @Test
     void withdrawsEmailMemberAndRevokesEveryLogin() {
         Fixture fixture = fixture(Member.createEmailMember("member@example.com", fixturePassword()));
@@ -88,7 +88,7 @@ class AccountWithdrawalTests {
         assertThat(proof.getStatus()).isEqualTo(com.macstudio.backend.auth.entity.AuthChallengeStatus.CONSUMED);
     }
 
-    /** UI 외 호출에서도 동일 이메일 재가입 불가 확인값을 서비스가 다시 검사한다. */
+    /** UI 외 호출에서도 3개월간 동일 이메일 재가입 제한 확인값을 서비스가 다시 검사한다. */
     @Test
     void requiresEmailReuseAcknowledgement() {
         Fixture fixture = fixture(Member.createEmailMember("member@example.com", fixturePassword()));

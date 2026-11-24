@@ -135,9 +135,9 @@ erDiagram
 
 ### member
 - 기존 email/password_hash만 NULL 허용으로 바꾸고 status/auth_version을 추가한다.
-- email: 검증된 서비스 이메일만 저장. 공백 제거·소문자화 정책을 서버에서 일관되게 적용. 기존 대소문자 비구분 collation과 UNIQUE 유지. 소셜 이메일이 없거나 신뢰 불가하면 NULL. 신뢰 가능한 이메일이 기존 회원과 중복되면 신규 가입 거절(충돌 회피를 위해 NULL로 바꾸지 않음). 탈퇴 회원도 이메일을 유지하므로 동일 이메일 재가입은 영구 차단한다.
+- email: 검증된 서비스 이메일만 저장. 공백 제거·소문자화 정책을 서버에서 일관되게 적용. 기존 대소문자 비구분 collation과 UNIQUE 유지. 소셜 이메일이 없거나 신뢰 불가하면 NULL. 탈퇴 후 3개월 동안 이메일을 유지해 재가입을 차단하고 파기 후 허용한다.
 - password_hash: BCrypt. 비밀번호가 있으면 email도 있어야 한다는 CHECK 적용. 이메일만 있고 비밀번호가 없는 소셜 회원은 허용.
-- status: 코드 기준 ACTIVE / DELETING / WITHDRAWN이며 기본값은 ACTIVE다. `withdrawn_at DATETIME(3) NULL`은 WITHDRAWN일 때만 값이 존재한다. 2026-11-04 로컬 mac에서 해당 매핑과 이메일 탈퇴 흐름을 검증했다. 최초 가입용 PENDING_TERMS는 제거한다. 이메일·소셜 모두 필수 인증과 약관 동의 완료 후에만 회원을 생성한다.
+- status: ACTIVE / DELETING / WITHDRAWN이며 기본값은 ACTIVE다. `withdrawn_at`은 WITHDRAWN일 때만 값이 존재하고 `purge_due_at`은 그 시각에서 달력 기준 3개월 뒤를 계산하는 STORED 생성 컬럼이다.
 - auth_version: 비밀번호 재설정·이메일 변경 등 보안 변경 시 증가. 현재 JWT 필터와 회원 대상 인증 증명은 발급 당시 값과 현재 값을 비교하며, 비밀번호 재설정에서 증가·검증한다.
 - 이메일 검증 시각, 이름, 프로필, 전화번호, last_login_at은 제외.
 
@@ -195,11 +195,12 @@ erDiagram
 |---|---|---|
 | member → dataset | RESTRICT, 기존 유지 | S3 정리 전에 회원만 지우는 실수 방지 |
 | dataset → chart | CASCADE, 기존 유지 | 데이터셋의 하위 차트 동시 제거 |
-| member → 인증용 5개 테이블 | CASCADE 제약은 관리 목적의 예외적 물리 삭제에만 적용 | 일반 회원 탈퇴는 member를 삭제하지 않는 soft delete이므로 CASCADE가 실행되지 않음 |
+| member → 인증용 5개 테이블 | ON DELETE CASCADE | 3개월 경과 member 파기 시 함께 삭제 |
+| member → dataset → chart | ON DELETE CASCADE | DB 메타데이터 파기. S3 삭제 작업은 독립 보존 |
 | auth_challenge → oauth_transaction | CASCADE | 만료 인증 정리 시 관련 임시 OAuth 상태도 제거 |
 
-일반 회원 탈퇴에서는 member 행과 정규화 이메일을 보존한다. 탈퇴 상태와 탈퇴 시각을 기록하고 동일 이메일 재가입을 차단한다. 동의 이력 등 나머지 개인정보의 보존·파기 범위와 보존 기간은 구현 전 별도로 확정해야 한다.
-탈퇴 흐름은 재인증 → DELETING/모든 토큰 폐기 → S3 정리 → dataset 삭제 → member soft delete 완료 상태 기록 순서다. member 최종 물리 삭제는 일반 탈퇴 절차에 포함하지 않는다.
+회원 탈퇴 즉시 WITHDRAWN과 탈퇴 시각을 기록하고 3개월 동안 이메일과 연결정보를 보존한다. 보관기간에는 동일 이메일 재가입을 차단한다.
+기한 경과 흐름은 파기 대상 잠금 재검사 → 회원 FK 없는 임시 이메일 기록 삭제 → member hard delete 및 DB CASCADE다. S3 도입 후에는 독립 삭제 작업을 먼저 남긴 뒤 member를 삭제해야 한다.
 **8개 테이블만으로 S3 삭제 재시도까지 구현되는 것은 아니다.** 이번 ERD에서 기존 저장 구조는 유지했다. 저장 객체/삭제 작업 테이블은 기존 STORAGE 설계의 후속 범위이며, 이를 구현하기 전에는 dataset/chart 참조를 남긴 채 DELETING 상태에서 S3 정리를 완료해야 한다. 실패 시 참조를 지우지 않고 재시도한다.
 
 ## DB 제약과 서비스 책임의 경계

@@ -142,7 +142,7 @@ public class AccountAuthService {
         });
     }
 
-    /** 현재 비밀번호를 재확인하고 모든 로그인을 폐기한 뒤 회원을 soft delete한다. */
+    /** 현재 비밀번호를 재확인하고 모든 로그인을 폐기한 뒤 3개월 보관 상태로 전환한다. */
     public void withdraw(String subject, WithdrawalRequest request) {
         withdraw(subject, request, null);
     }
@@ -150,7 +150,7 @@ public class AccountAuthService {
     /** 로그인 방식에 따라 비밀번호 또는 짧은 소셜 재인증 증명을 소비한다. */
     public void withdraw(String subject, WithdrawalRequest request, String socialReauthToken) {
         if (!request.acknowledgeEmailReuseBlocked()) {
-            throw bad("WITHDRAWAL_ACK_REQUIRED", "동일 이메일 재가입 제한을 확인해 주세요.");
+            throw bad("WITHDRAWAL_ACK_REQUIRED", "탈퇴 후 3개월간 동일 이메일 재가입 제한을 확인해 주세요.");
         }
         Long memberId = parseMemberId(subject);
         transaction.executeWithoutResult(s -> {
