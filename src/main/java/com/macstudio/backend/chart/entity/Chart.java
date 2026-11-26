@@ -59,6 +59,9 @@ public class Chart {
     @Column(name = "thumbnail_chart_revision", columnDefinition = "BIGINT UNSIGNED")
     private Long thumbnailChartRevision;
 
+    @Column(name = "thumbnail_dataset_revision", columnDefinition = "BIGINT UNSIGNED")
+    private Long thumbnailDatasetRevision;
+
     @Column(name = "created_at", nullable = false, updatable = false,
             columnDefinition = "DATETIME(3)")
     private LocalDateTime createdAt;
@@ -96,13 +99,16 @@ public class Chart {
         this.updatedAt = utcNow();
     }
 
-    /** 현재 revision에서 검증된 새 썸네일 메타데이터를 결합한다. */
-    public void attachThumbnail(String key, long sizeBytes, String contentType) {
+    /** 현재 차트·데이터셋 revision에서 렌더링된 새 썸네일 메타데이터를 결합한다. */
+    public void attachThumbnail(String key, long sizeBytes, String contentType, long datasetRevision) {
         this.thumbnailKey = requireText(key, 512, "thumbnailKey");
-        if (sizeBytes < 1) throw new IllegalArgumentException("Invalid thumbnail size");
+        if (sizeBytes < 1 || datasetRevision < 1) {
+            throw new IllegalArgumentException("Invalid thumbnail metadata");
+        }
         this.thumbnailSizeBytes = sizeBytes;
         this.thumbnailContentType = requireText(contentType, 64, "thumbnailContentType");
         this.thumbnailChartRevision = revision;
+        this.thumbnailDatasetRevision = datasetRevision;
         this.updatedAt = utcNow();
     }
 
@@ -112,6 +118,7 @@ public class Chart {
         this.thumbnailSizeBytes = null;
         this.thumbnailContentType = null;
         this.thumbnailChartRevision = null;
+        this.thumbnailDatasetRevision = null;
         this.updatedAt = utcNow();
     }
 

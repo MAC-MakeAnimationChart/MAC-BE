@@ -46,7 +46,17 @@ class BackendSmokeTests {
     @org.springframework.test.context.bean.override.mockito.MockitoBean
     private com.macstudio.backend.dataset.service.DatasetUpdateService datasetUpdateService;
     @org.springframework.test.context.bean.override.mockito.MockitoBean
+    private com.macstudio.backend.dataset.service.DatasetChartQueryService datasetChartQueryService;
+    @org.springframework.test.context.bean.override.mockito.MockitoBean
     private com.macstudio.backend.chart.service.ChartUpdateService chartUpdateService;
+    @org.springframework.test.context.bean.override.mockito.MockitoBean
+    private com.macstudio.backend.chart.service.ChartThumbnailService chartThumbnailService;
+    @org.springframework.test.context.bean.override.mockito.MockitoBean
+    private com.macstudio.backend.chart.service.ChartCreationService chartCreationService;
+    @org.springframework.test.context.bean.override.mockito.MockitoBean
+    private com.macstudio.backend.chart.service.ChartThumbnailReadService chartThumbnailReadService;
+    @org.springframework.test.context.bean.override.mockito.MockitoBean
+    private com.macstudio.backend.member.service.MyPageQueryService myPageQueryService;
     @LocalServerPort
     private int port;
 
@@ -63,7 +73,11 @@ class BackendSmokeTests {
         var apiDocs = get("/v3/api-docs", null);
         assertThat(apiDocs.statusCode()).isEqualTo(200);
         assertThat(apiDocs.body()).contains("/api/v1/datasets", "/api/v1/charts/{chartId}",
-                "multipart/form-data", "Idempotency-Key", "thumbnail");
+                "/api/v1/datasets/{datasetId}/charts",
+                "/api/v1/me/datasets",
+                "/api/v1/charts/{chartId}/thumbnail", "multipart/form-data",
+                "Idempotency-Key", "expectedDatasetRevision",
+                "basedOnDatasetRevision", "basedOnChartRevision");
         assertThat(get("/swagger-ui/index.html", null).statusCode()).isEqualTo(200);
     }
 

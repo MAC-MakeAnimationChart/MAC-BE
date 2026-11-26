@@ -122,7 +122,7 @@ class DatasetUpdateServiceTests {
         ReflectionTestUtils.setField(value, "id", id);
         ReflectionTestUtils.setField(value, "createdAt", LocalDateTime.of(2026, 11, 24, 10, 0));
         ReflectionTestUtils.setField(value, "updatedAt", LocalDateTime.of(2026, 11, 24, 10, 0));
-        value.attachThumbnail(key, size, "image/png");
+        value.attachThumbnail(key, size, "image/png", value.getDataset().getRevision());
         return value;
     }
 }

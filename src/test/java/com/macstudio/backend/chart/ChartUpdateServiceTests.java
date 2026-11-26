@@ -4,7 +4,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -23,7 +22,6 @@ import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionStatus;
@@ -56,7 +54,7 @@ class ChartUpdateServiceTests {
         ReflectionTestUtils.setField(chart, "id", 21L);
         ReflectionTestUtils.setField(chart, "createdAt", LocalDateTime.of(2026, 11, 24, 10, 0));
         ReflectionTestUtils.setField(chart, "updatedAt", LocalDateTime.of(2026, 11, 24, 10, 0));
-        chart.attachThumbnail("dev/chart-thumbnails/21/old.png", 100, "image/png");
+        chart.attachThumbnail("dev/chart-thumbnails/21/old.png", 100, "image/png", 1L);
 
         when(charts.findOwnedById(21L, 7L)).thenReturn(Optional.of(chart));
         when(charts.findOwnedByIdForUpdate(21L, 7L)).thenReturn(Optional.of(chart));
@@ -66,61 +64,37 @@ class ChartUpdateServiceTests {
     }
 
     @Test
-    void updatesSettingsAndReplacesThumbnailThenDeletesPreviousObjectBestEffort() throws Exception {
-        when(thumbnails.upload(org.mockito.ArgumentMatchers.eq(21L), any())).thenReturn(new ChartThumbnailStorage.StoredThumbnail(
-                "dev/chart-thumbnails/21/new.png", 120, "image/png"));
+    void updatesSettingsAndInvalidatesPreviousThumbnailBestEffort() throws Exception {
         when(thumbnails.deleteBestEffort("dev/chart-thumbnails/21/old.png")).thenReturn(false);
         var command = new ChartPatchCommand("1", "New title", null, 1,
                 json.readTree("{\"x\":\"month\",\"y\":\"sales\",\"color\":\"blue\"}"));
 
-        var response = service.patch("7", "21", command,
-                new MockMultipartFile("thumbnail", "chart.png", "image/png", new byte[]{1}));
+        var response = service.patch("7", "21", command);
 
         assertThat(response.chartRevision()).isEqualTo("2");
         assertThat(response.datasetRevision()).isEqualTo("1");
-        assertThat(response.thumbnailState()).isEqualTo("READY");
+        assertThat(response.thumbnailState()).isEqualTo("NONE");
         assertThat(chart.getTitle()).isEqualTo("New title");
-        assertThat(chart.getThumbnailKey()).isEqualTo("dev/chart-thumbnails/21/new.png");
-        assertThat(chart.getThumbnailChartRevision()).isEqualTo(2L);
-        verify(thumbnails).deleteBestEffort("dev/chart-thumbnails/21/old.png");
-    }
-
-    @Test
-    void savesChartEvenWhenThumbnailUploadFailsAndInvalidatesOldThumbnail() throws Exception {
-        when(thumbnails.upload(org.mockito.ArgumentMatchers.eq(21L), any())).thenThrow(new ApiException(
-                org.springframework.http.HttpStatus.BAD_GATEWAY, "THUMBNAIL_UPLOAD_FAILED", "failed"));
-        var command = new ChartPatchCommand("1", "Saved without thumbnail", null, null, null);
-
-        var response = service.patch("7", "21", command,
-                new MockMultipartFile("thumbnail", "chart.png", "image/png", new byte[]{1}));
-
-        assertThat(response.chartRevision()).isEqualTo("2");
-        assertThat(response.thumbnailState()).isEqualTo("FAILED");
         assertThat(chart.getThumbnailKey()).isNull();
         verify(thumbnails).deleteBestEffort("dev/chart-thumbnails/21/old.png");
     }
 
     @Test
-    void thumbnailOnlySaveKeepsRevisionAndReplacesObject() {
-        when(thumbnails.upload(org.mockito.ArgumentMatchers.eq(21L), any())).thenReturn(new ChartThumbnailStorage.StoredThumbnail(
-                "dev/chart-thumbnails/21/initial.png", 80, "image/png"));
-
-        var response = service.patch("7", "21", new ChartPatchCommand("1", null, null, null, null),
-                new MockMultipartFile("thumbnail", "chart.png", "image/png", new byte[]{1}));
+    void noOpSaveKeepsRevisionAndThumbnail() {
+        var response = service.patch("7", "21", new ChartPatchCommand("1", null, null, null, null));
 
         assertThat(response.chartRevision()).isEqualTo("1");
         assertThat(response.thumbnailState()).isEqualTo("READY");
         assertThat(chart.getThumbnailChartRevision()).isEqualTo(1L);
+        assertThat(chart.getThumbnailDatasetRevision()).isEqualTo(1L);
     }
 
     @Test
     void rejectsStaleRevisionBeforeUploadingThumbnail() {
         var command = new ChartPatchCommand("9", "New title", null, null, null);
 
-        assertThatThrownBy(() -> service.patch("7", "21", command,
-                new MockMultipartFile("thumbnail", "chart.png", "image/png", new byte[]{1})))
+        assertThatThrownBy(() -> service.patch("7", "21", command))
                 .isInstanceOfSatisfying(ApiException.class,
                         error -> assertThat(error.code()).isEqualTo("CHART_REVISION_CONFLICT"));
-        verify(thumbnails, never()).upload(org.mockito.ArgumentMatchers.anyLong(), any());
     }
 }

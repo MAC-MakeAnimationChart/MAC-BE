@@ -81,6 +81,7 @@ CREATE TABLE chart (
     thumbnail_content_type VARCHAR(64)
         CHARACTER SET ascii COLLATE ascii_bin NULL,
     thumbnail_chart_revision BIGINT UNSIGNED NULL,
+    thumbnail_dataset_revision BIGINT UNSIGNED NULL,
     created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
     updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)
         ON UPDATE CURRENT_TIMESTAMP(3),
@@ -96,6 +97,7 @@ CREATE TABLE chart (
             AND thumbnail_size_bytes IS NULL
             AND thumbnail_content_type IS NULL
             AND thumbnail_chart_revision IS NULL
+            AND thumbnail_dataset_revision IS NULL
         )
         OR
         (
@@ -103,6 +105,7 @@ CREATE TABLE chart (
             AND thumbnail_size_bytes IS NOT NULL
             AND thumbnail_content_type IS NOT NULL
             AND thumbnail_chart_revision = revision
+            AND thumbnail_dataset_revision >= 1
         )
     ),
     CONSTRAINT fk_chart_dataset FOREIGN KEY (dataset_id)

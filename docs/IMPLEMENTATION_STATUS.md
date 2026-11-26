@@ -1,4 +1,25 @@
-# 구현 상태 — 2026-11-24
+# 구현 상태 — 2026-11-26
+
+## 마이페이지 데이터셋·차트 페이지
+
+- `GET /api/v1/me/datasets?page=0&size=20&query=`는 회원 이메일, 전체 dataset/chart 수, 회원 활성 저장량과 검색된 dataset 폴더 페이지만 반환한다.
+- `GET /api/v1/datasets/{datasetId}/charts?page=0&size=20`는 선택 dataset 기본 정보와 chart 카드를 별도 페이지로 반환한다. 두 페이지 파라미터는 독립적이다.
+- dataset 목록은 페이지 ID별 chart count만 묶음 집계하며 두 응답 모두 data/figure JSON 전체를 넣지 않는다.
+- `GET /api/v1/charts/{chartId}/thumbnail`은 소유권을 확인하고 private S3 이미지를 no-store로 반환한다.
+- 기본 테스트 71개(실패·오류·건너뜀 0)와 bootJar가 통과했다. 실제 local MySQL 페이지 쿼리와 실버킷 썸네일 읽기는 미검증이다.
+
+## 기존 데이터셋 차트 추가
+
+- `POST /api/v1/datasets/{datasetId}/charts`는 현재 dataset revision과 전체 차트 figure 기본 설정을 받아 revision 1 차트를 생성한다.
+- dataset 소유권·ACTIVE 회원·revision·figure 크기·회원 저장량을 검증한다. dataset revision은 유지하고 `updated_at`만 갱신한다.
+- 기본 테스트 62개와 bootJar가 통과했다. 실제 local MySQL API 호출은 미검증이다.
+
+## 전용 차트 썸네일 저장
+
+- `PUT /api/v1/charts/{chartId}/thumbnail`은 FE 렌더링 완료 후 `basedOnDatasetRevision`, `basedOnChartRevision`, PNG/JPEG를 받는다.
+- 업로드 전후 양쪽 revision을 재검사하여 오래된 렌더링은 409로 거절하고 새 S3 객체를 best-effort 삭제한다. 성공 시 이전 객체도 DB 커밋 후 best-effort 삭제한다.
+- `PATCH /api/v1/charts/{chartId}`는 JSON 차트 옵션 저장만 담당하며 설정 변경 시 기존 썸네일을 무효화한다.
+- 기본 테스트 57개와 bootJar가 통과했다. 실제 local MySQL ALTER·API 호출과 실버킷 교체는 미검증이다.
 
 이메일 인증 시작 → 코드 확인 → 회원 DB 저장 → 로그인과 로그인 실패 후 비밀번호 재설정 흐름의 구현·로컬 mac 통합 검증을 완료했다.
 
@@ -11,8 +32,8 @@
 
 ## 차트 저장·썸네일 수명주기
 
-- `PATCH /api/v1/charts/{chartId}`는 저장 버튼과 FE 자동 저장이 공통 사용한다. expectedRevision 충돌은 409이며 실제 옵션 변경 시에만 revision을 증가시킨다.
-- 선택적 PNG/JPEG 썸네일은 private S3의 서버 생성 키에 업로드하고 DB 포인터 교체 후 이전 객체를 best-effort 삭제한다. 삭제 실패는 저장 성공에 영향을 주지 않는다.
+- `PATCH /api/v1/charts/{chartId}`는 저장 버튼과 FE 자동 저장이 공통 사용하는 JSON 옵션 저장 API다. expectedRevision 충돌은 409이며 실제 옵션 변경 시에만 revision을 증가시킨다.
+- PNG/JPEG 썸네일은 전용 PUT에서 private S3의 서버 생성 키에 업로드하고 DB 포인터 교체 후 이전 객체를 best-effort 삭제한다. 삭제 실패는 저장 성공에 영향을 주지 않는다.
 - 미참조 썸네일 정리 스케줄러는 구현했지만 기본 비활성화 상태다. 실제 버킷 prefix·DeleteObject 권한을 확인한 뒤 활성화해야 한다.
 - 관련 단위·HTTP 회귀를 포함한 기본 테스트 50개는 통과했다. 실제 local MySQL PATCH 통합과 실버킷 교체·스케줄러 삭제는 미검증이다.
 

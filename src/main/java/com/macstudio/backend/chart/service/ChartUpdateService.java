@@ -8,7 +8,6 @@ import com.macstudio.backend.chart.service.ChartUpdateValidator.PreparedChartPat
 import com.macstudio.backend.dataset.repository.DatasetRepository;
 import com.macstudio.backend.global.exception.ApiException;
 import com.macstudio.backend.storage.service.ChartThumbnailStorage;
-import com.macstudio.backend.storage.service.ChartThumbnailStorage.StoredThumbnail;
 import java.nio.charset.StandardCharsets;
 import java.time.ZoneOffset;
 import org.springframework.beans.factory.annotation.Value;
@@ -16,9 +15,8 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
-import org.springframework.web.multipart.MultipartFile;
 
-/** 차트 부분 수정, revision 충돌, 저장량과 S3 썸네일 교체를 조정한다. */
+/** 차트 옵션 부분 수정, revision 충돌, 저장량과 기존 썸네일 무효화를 조정한다. */
 @Service
 public class ChartUpdateService {
     private final ChartRepository charts;
@@ -40,8 +38,7 @@ public class ChartUpdateService {
         this.maxStorageBytes = maxStorageBytes;
     }
 
-    public ChartPatchResponse patch(String subject, String chartIdValue,
-            ChartPatchCommand command, MultipartFile thumbnail) {
+    public ChartPatchResponse patch(String subject, String chartIdValue, ChartPatchCommand command) {
         long memberId = parsePositiveLong(subject, HttpStatus.UNAUTHORIZED, "UNAUTHORIZED");
         long chartId = parsePositiveLong(chartIdValue, HttpStatus.BAD_REQUEST, "INVALID_CHART_ID");
         PreparedChartPatch prepared = validator.validate(command);
@@ -50,34 +47,17 @@ public class ChartUpdateService {
         if (!observed.getDataset().getMember().isActive()) throw unauthorized();
         if (observed.getRevision() != prepared.expectedRevision()) throw revisionConflict();
 
-        StoredThumbnail uploaded = null;
-        boolean thumbnailFailed = false;
-        try {
-            if (thumbnail != null && !thumbnail.isEmpty()) {
-                try {
-                    uploaded = thumbnails.upload(chartId, thumbnail);
-                } catch (ApiException failure) {
-                    // 차트 설정 저장을 우선하며 FE는 FAILED 상태에서 썸네일만 재시도할 수 있다.
-                    thumbnailFailed = true;
-                }
-            }
-            StoredThumbnail finalUploaded = uploaded;
-            boolean finalThumbnailFailed = thumbnailFailed;
-            UpdateOutcome outcome = transaction.execute(status ->
-                    updateInTransaction(memberId, chartId, prepared, finalUploaded, finalThumbnailFailed));
-            if (outcome == null) throw new IllegalStateException("Chart update transaction returned no result");
-            if (outcome.previousThumbnailKey() != null) {
-                thumbnails.deleteBestEffort(outcome.previousThumbnailKey());
-            }
-            return outcome.response();
-        } catch (RuntimeException failure) {
-            if (uploaded != null) thumbnails.deleteBestEffort(uploaded.key());
-            throw failure;
+        UpdateOutcome outcome = transaction.execute(status ->
+                updateInTransaction(memberId, chartId, prepared));
+        if (outcome == null) throw new IllegalStateException("Chart update transaction returned no result");
+        if (outcome.previousThumbnailKey() != null) {
+            thumbnails.deleteBestEffort(outcome.previousThumbnailKey());
         }
+        return outcome.response();
     }
 
     private UpdateOutcome updateInTransaction(long memberId, long chartId,
-            PreparedChartPatch prepared, StoredThumbnail uploaded, boolean thumbnailFailed) {
+            PreparedChartPatch prepared) {
         Chart chart = charts.findOwnedByIdForUpdate(chartId, memberId).orElseThrow(this::notFound);
         if (!chart.getDataset().getMember().isActive()) throw unauthorized();
         if (chart.getRevision() != prepared.expectedRevision()) throw revisionConflict();
@@ -96,8 +76,7 @@ public class ChartUpdateService {
         long oldFigureBytes = chart.getFigureJson().getBytes(StandardCharsets.UTF_8).length;
         long oldThumbnailBytes = chart.getThumbnailSizeBytes() == null ? 0L : chart.getThumbnailSizeBytes();
         long finalFigureBytes = finalFigure.getBytes(StandardCharsets.UTF_8).length;
-        long finalThumbnailBytes = uploaded != null ? uploaded.sizeBytes()
-                : settingsChanged ? 0L : oldThumbnailBytes;
+        long finalThumbnailBytes = settingsChanged ? 0L : oldThumbnailBytes;
         long finalStorage = currentStorage - oldFigureBytes - oldThumbnailBytes
                 + finalFigureBytes + finalThumbnailBytes;
         if (finalStorage > maxStorageBytes) {
@@ -105,21 +84,17 @@ public class ChartUpdateService {
                     "회원 저장 용량을 초과했습니다.");
         }
 
-        String previousKey = chart.getThumbnailKey();
+        String previousThumbnailKey = settingsChanged ? chart.getThumbnailKey() : null;
         if (settingsChanged) chart.updateSettings(finalTitle, finalType, finalSchema, finalFigure);
-        if (uploaded != null) chart.attachThumbnail(uploaded.key(), uploaded.sizeBytes(), uploaded.contentType());
-        if (settingsChanged || uploaded != null) chart.getDataset().touch();
+        if (settingsChanged) chart.getDataset().touch();
         charts.flush();
 
-        String state = thumbnailFailed ? "FAILED"
-                : chart.getThumbnailKey() == null ? "NONE" : "READY";
+        String state = chart.getThumbnailKey() == null ? "NONE" : "READY";
         ChartPatchResponse response = new ChartPatchResponse(chart.getId().toString(),
                 chart.getDataset().getId().toString(), Long.toString(chart.getRevision()),
                 Long.toString(chart.getDataset().getRevision()), state,
                 chart.getUpdatedAt().toInstant(ZoneOffset.UTC));
-        String obsoleteKey = previousKey != null && !previousKey.equals(chart.getThumbnailKey())
-                ? previousKey : null;
-        return new UpdateOutcome(response, obsoleteKey);
+        return new UpdateOutcome(response, previousThumbnailKey);
     }
 
     private static long parsePositiveLong(String value, HttpStatus status, String code) {
@@ -147,4 +122,5 @@ public class ChartUpdateService {
     }
 
     private record UpdateOutcome(ChartPatchResponse response, String previousThumbnailKey) {}
+
 }

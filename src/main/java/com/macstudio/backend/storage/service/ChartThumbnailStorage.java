@@ -13,7 +13,9 @@ import software.amazon.awssdk.core.exception.SdkException;
 import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.DeleteObjectRequest;
+import software.amazon.awssdk.services.s3.model.GetObjectRequest;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
+import software.amazon.awssdk.services.s3.model.S3Exception;
 import software.amazon.awssdk.services.s3.model.ServerSideEncryption;
 
 /** 차트 썸네일을 서버 생성 키로 업로드하고 미참조 객체를 안전하게 삭제한다. */
@@ -64,6 +66,28 @@ public class ChartThumbnailStorage {
         } catch (SdkException exception) {
             log.warn("Chart thumbnail cleanup deferred after S3 delete failure");
             return false;
+        }
+    }
+
+    /** 소유권 검사가 끝난 현재 썸네일 키의 private S3 객체를 바이트로 읽는다. */
+    public byte[] download(String key) {
+        if (key == null || !key.startsWith(prefix)) {
+            throw new ApiException(HttpStatus.NOT_FOUND, "THUMBNAIL_NOT_FOUND",
+                    "현재 썸네일을 찾을 수 없습니다.");
+        }
+        try {
+            return requireClient().getObjectAsBytes(
+                    GetObjectRequest.builder().bucket(bucket).key(key).build()).asByteArray();
+        } catch (S3Exception exception) {
+            if (exception.statusCode() == 404) {
+                throw new ApiException(HttpStatus.NOT_FOUND, "THUMBNAIL_NOT_FOUND",
+                        "현재 썸네일을 찾을 수 없습니다.");
+            }
+            throw new ApiException(HttpStatus.BAD_GATEWAY, "THUMBNAIL_READ_FAILED",
+                    "썸네일을 불러오지 못했습니다.");
+        } catch (SdkException exception) {
+            throw new ApiException(HttpStatus.BAD_GATEWAY, "THUMBNAIL_READ_FAILED",
+                    "썸네일을 불러오지 못했습니다.");
         }
     }
 
